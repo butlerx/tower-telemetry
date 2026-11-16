@@ -39,13 +39,20 @@ use crate::request;
 /// Keep it cheap: it runs on every request. Match on the method, path and
 /// headers; don't parse bodies or do I/O.
 pub trait RequestFilter {
-    /// `true` to leave the request out. Default: trace every request.
+    /// Whether to leave `request` out of tracing: `true` skips it.
+    ///
+    /// Called once per request, before the span is created, with only the
+    /// request's method, URI, version, headers and extensions to go on: the body
+    /// hasn't been read. Keep it cheap. Default: `false`, trace every request.
     fn should_ignore<B>(_request: &Request<B>) -> bool {
         false
     }
 }
 
-/// Traces every request.
+/// A [`RequestFilter`] that keeps every request: the default for
+/// [`OtelTraceLayer`](crate::OtelTraceLayer).
+///
+/// Use it to trace health checks too, or as the base for a filter of your own.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NoOpFilter;
 
@@ -137,6 +144,8 @@ pub const HEALTHCHECK_USER_AGENTS: [&str; 10] = [
 pub struct HealthcheckFilter;
 
 impl RequestFilter for HealthcheckFilter {
+    /// `true` when the path is one of [`HEALTHCHECK_PATHS`] or the user agent
+    /// starts with one of [`HEALTHCHECK_USER_AGENTS`].
     fn should_ignore<B>(request: &Request<B>) -> bool {
         is_healthcheck_path(request.uri().path())
             || is_healthcheck_user_agent(request::header(request.headers(), &USER_AGENT))

@@ -99,8 +99,13 @@ pub trait SpanDecorator {
         })
     }
 
-    /// Record request fields beyond the common ones. `span` is disabled
-    /// (recording does nothing) for filtered-out requests.
+    /// Add attributes from the request, once its span exists.
+    ///
+    /// Called once per request, before the inner service. Add attributes with
+    /// `OpenTelemetrySpanExt::set_attribute`: `span.record` only reaches fields
+    /// the span declared, and drops others without warning. For filtered-out
+    /// requests, `span` is disabled and anything set on it is dropped. Default:
+    /// nothing.
     fn on_request<B>(_request: &Request<B>, _span: &Span) {}
 
     /// Record response fields, or change the response. `context` is the
@@ -111,7 +116,13 @@ pub trait SpanDecorator {
     }
 }
 
-/// Record `otel.status_code`: `ERROR` for a `5xx` response, else `OK`.
+/// Record `otel.status_code` on `span`: `ERROR` for a `5xx` response, `OK`
+/// otherwise.
+///
+/// OpenTelemetry's HTTP conventions mark server spans as errors only for
+/// `5xx`: a `4xx` is the client's mistake, not the server's. The default
+/// [`SpanDecorator::on_response`] calls it; call it from your own
+/// `on_response` to keep that behaviour.
 pub fn mark_server_errors<B>(span: &Span, response: &Response<B>) {
     span.record(
         "otel.status_code",
@@ -123,7 +134,12 @@ pub fn mark_server_errors<B>(span: &Span, response: &Response<B>) {
     );
 }
 
-/// Names spans by method and route and marks `5xx` responses as errors.
+/// The [`SpanDecorator`] [`OtelTraceLayer`](crate::OtelTraceLayer) uses by
+/// default: every method left at its default.
+///
+/// It names spans `"{method} {route}"`, or the method alone without a matched
+/// route, adds nothing beyond the layer's own attributes, and marks `5xx`
+/// responses as errors. It doesn't touch the response.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct DefaultSpanDecorator;
 
@@ -136,6 +152,10 @@ impl SpanDecorator for DefaultSpanDecorator {}
 pub struct PropagatingSpanDecorator;
 
 impl SpanDecorator for PropagatingSpanDecorator {
+    /// Write the span's trace context into the response headers with the
+    /// global propagator (`traceparent` and `tracestate` with the W3C one), then
+    /// mark `5xx` responses as errors like the default. Callers can then log or
+    /// show the trace id of their request.
     fn on_response<B>(span: &Span, context: &opentelemetry::Context, response: &mut Response<B>) {
         opentelemetry::global::get_text_map_propagator(|propagator| {
             propagator.inject_context(context, &mut HeaderInjector(response.headers_mut()));

@@ -21,33 +21,41 @@ use super::{MessagingOperation, MessagingSpan};
 /// instead of continuing its producer's. See the
 /// [module docs](super#consuming-one-message-at-a-time) for a full example.
 pub trait Message {
-    /// `messaging.system`, e.g. `aws_sqs` or `kafka`.
+    /// The broker, as `messaging.system`: `aws_sqs`, `kafka`, `rabbitmq`, ... (see
+    /// the [module docs](super#messagingsystem)). Usually a constant.
     fn system(&self) -> &str;
 
-    /// The queue or topic it came from (`messaging.destination.name`).
-    /// Names the span: `process {destination}`.
+    /// The queue, topic or subject the message came from
+    /// (`messaging.destination.name`). Names the span: `process {destination}`,
+    /// or plain `process` without one. Default: none.
     fn destination(&self) -> Option<&str> {
         None
     }
 
-    /// Its broker-assigned id (`messaging.message.id`).
+    /// The id the broker gave the message (`messaging.message.id`), such as an
+    /// SQS `MessageId`. Default: none.
     fn message_id(&self) -> Option<&str> {
         None
     }
 
-    /// Its body size, in bytes (`messaging.message.body.size`).
+    /// The message body's size in bytes (`messaging.message.body.size`).
+    /// Default: none.
     fn body_size(&self) -> Option<u64> {
         None
     }
 
-    /// The consumer group or subscription it was read by
-    /// (`messaging.consumer.group.name`).
+    /// The consumer group, subscription or queue group that read the message
+    /// (`messaging.consumer.group.name`), such as a Kafka consumer group.
+    /// Default: none.
     fn consumer_group(&self) -> Option<&str> {
         None
     }
 
-    /// The producer's trace context, usually [`extract_context`](super::extract_context) over the
-    /// message's headers. Default: none, so processing starts a new trace.
+    /// The producer's trace context, which the `process` span continues:
+    /// usually [`extract_context`](super::extract_context) over the message's
+    /// headers or attributes. A context without a valid span (the producer
+    /// didn't send one) starts a new trace. Default: none, so every message
+    /// starts a new trace; implement it to connect producers and consumers.
     fn context(&self) -> opentelemetry::Context {
         opentelemetry::Context::new()
     }
@@ -85,6 +93,11 @@ impl<S> Layer<S> for MessageTraceLayer {
 }
 
 /// The service [`MessageTraceLayer`] wraps around a consumer.
+///
+/// You don't build it yourself: [`MessageTraceLayer`] does. For each
+/// [`Message`], it starts a `process` span parented on the message's context,
+/// calls the consumer inside it, and passes its response or error through
+/// unchanged. It's `Clone` when the consumer is.
 #[derive(Debug, Clone)]
 pub struct MessageTraceService<S> {
     /// The wrapped consumer.
@@ -123,7 +136,12 @@ where
 }
 
 pin_project_lite::pin_project! {
-    /// Response future for [`MessageTraceService`].
+    /// The future [`MessageTraceService`] returns: the consumer's future, polled
+    /// inside the message's `process` span.
+    ///
+    /// When the consumer fails, it marks the span as an error, with the error's
+    /// `Display` text as `exception.message`. The span ends when the future
+    /// completes or is dropped.
     pub struct MessageFuture<F> {
         // The consumer's future.
         #[pin]
