@@ -42,7 +42,7 @@ The layers are plain Tower middleware. Wrap your service with `ServiceBuilder` a
 ```rust
 use tower_telemetry::{HealthcheckFilter, OtelTraceLayer, PropagatingSpanDecorator};
 
-// Return `traceparent` to callers and skip AWS load balancer health checks.
+// Return `traceparent` to callers and skip health checks.
 let layer = OtelTraceLayer::<PropagatingSpanDecorator, HealthcheckFilter>::default();
 ```
 
@@ -59,7 +59,7 @@ struct SkipProbes;
 
 impl RequestFilter for SkipProbes {
     fn should_ignore<B>(request: &Request<B>) -> bool {
-        matches!(request.uri().path(), "/healthz" | "/readyz")
+        matches!(request.uri().path(), "/metrics" | "/livez")
             || HealthcheckFilter::should_ignore(request)
     }
 }
@@ -67,7 +67,9 @@ impl RequestFilter for SkipProbes {
 let layer = OtelTraceLayer::<DefaultSpanDecorator, SkipProbes>::default();
 ```
 
-It runs on every request, so match on the method, path and headers only.
+`HealthcheckFilter` skips `/health`, `/ready`, `/healthz` and `/healthcheck` (exact paths, with or without a trailing slash), plus AWS load balancer and ECS health checks by user agent.
+
+The filter runs on every request, so match on the method, path and headers only.
 
 ## Custom span attributes
 

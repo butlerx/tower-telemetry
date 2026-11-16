@@ -14,7 +14,7 @@ use crate::request;
 /// It filters traces only; [`HttpMetricsLayer`](crate::HttpMetricsLayer)
 /// still counts the request.
 ///
-/// Leave out probes by path, and AWS health checks by user agent:
+/// Leave out scrapes and liveness probes as well as the usual health checks:
 ///
 /// ```
 /// use http::Request;
@@ -25,14 +25,14 @@ use crate::request;
 ///
 /// impl RequestFilter for SkipProbes {
 ///     fn should_ignore<B>(request: &Request<B>) -> bool {
-///         matches!(request.uri().path(), "/healthz" | "/readyz")
+///         matches!(request.uri().path(), "/metrics" | "/livez")
 ///             || HealthcheckFilter::should_ignore(request)
 ///     }
 /// }
 ///
 /// let layer = OtelTraceLayer::<DefaultSpanDecorator, SkipProbes>::default();
 /// # let _ = layer;
-/// # assert!(SkipProbes::should_ignore(&Request::get("/healthz").body(()).unwrap()));
+/// # assert!(SkipProbes::should_ignore(&Request::get("/metrics").body(()).unwrap()));
 /// # assert!(!SkipProbes::should_ignore(&Request::get("/users").body(()).unwrap()));
 /// ```
 ///
@@ -51,16 +51,34 @@ pub struct NoOpFilter;
 
 impl RequestFilter for NoOpFilter {}
 
-/// Leaves out AWS load balancer and ECS health checks, by user agent, so they
-/// don't drown real traffic.
+/// The paths [`HealthcheckFilter`] leaves out, matched exactly (a trailing
+/// slash is ignored).
+pub const HEALTHCHECK_PATHS: [&str; 4] = ["/health", "/ready", "/healthz", "/healthcheck"];
+
+/// Leaves out health checks so they don't drown real traffic: requests to
+/// any of [`HEALTHCHECK_PATHS`], and AWS load balancer and ECS health checks
+/// by user agent, whatever path they probe.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct HealthcheckFilter;
 
 impl RequestFilter for HealthcheckFilter {
     fn should_ignore<B>(request: &Request<B>) -> bool {
-        let user_agent = request::header(request.headers(), &USER_AGENT);
-        user_agent.starts_with("ELB-HealthChecker/") || user_agent.starts_with("ECS-HealthChecker")
+        is_healthcheck_path(request.uri().path()) || {
+            let user_agent = request::header(request.headers(), &USER_AGENT);
+            user_agent.starts_with("ELB-HealthChecker/")
+                || user_agent.starts_with("ECS-HealthChecker")
+        }
     }
+}
+
+/// Whether `path` is one of [`HEALTHCHECK_PATHS`], with or without a
+/// trailing slash.
+fn is_healthcheck_path(path: &str) -> bool {
+    let path = path
+        .strip_suffix('/')
+        .filter(|path| !path.is_empty())
+        .unwrap_or(path);
+    HEALTHCHECK_PATHS.contains(&path)
 }
 
 #[cfg(test)]
@@ -89,6 +107,23 @@ mod tests {
             "curl/8.0"
         )));
         assert!(!HealthcheckFilter::should_ignore(&Request::new(())));
+    }
+
+    #[test]
+    fn healthcheck_filter_ignores_healthcheck_paths() {
+        for path in HEALTHCHECK_PATHS
+            .iter()
+            .flat_map(|path| [(*path).to_owned(), format!("{path}/")])
+        {
+            let request = Request::get(path.as_str())
+                .body(())
+                .expect("static request");
+            assert!(HealthcheckFilter::should_ignore(&request), "{path}");
+        }
+        for path in ["/", "/healthy", "/health/db", "/api/health", "/users"] {
+            let request = Request::get(path).body(()).expect("static request");
+            assert!(!HealthcheckFilter::should_ignore(&request), "{path}");
+        }
     }
 
     #[test]

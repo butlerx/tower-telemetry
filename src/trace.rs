@@ -11,5 +11,5 @@ mod layer;
 pub use decorator::{
     DefaultSpanDecorator, PropagatingSpanDecorator, SpanDecorator, mark_server_errors,
 };
-pub use filter::{HealthcheckFilter, NoOpFilter, RequestFilter};
+pub use filter::{HEALTHCHECK_PATHS, HealthcheckFilter, NoOpFilter, RequestFilter};
 pub use layer::{OtelTraceLayer, OtelTraceService, ResponseFuture};
