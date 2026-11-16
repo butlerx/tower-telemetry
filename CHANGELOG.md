@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.0.1](https://github.com/butlerx/tower-telemetry/compare/v0.0.0...v0.0.1) (2026-11-16)
+
+
+### Bug Fixes
+
+* export span integers (status code, sizes, port, batch count) as integers, not strings ([66794e4](https://github.com/butlerx/tower-telemetry/commit/66794e45c356f807b24b5f79bb9bb537488beec5))
+* requests dropped before a response no longer record duration or response size ([13f2add](https://github.com/butlerx/tower-telemetry/commit/13f2add4040e310b27a6f412da4e558f7ada1d3b))
+
+
+### Code Improvements
+
+* take attribute names from opentelemetry-semantic-conventions ([66794e4](https://github.com/butlerx/tower-telemetry/commit/66794e45c356f807b24b5f79bb9bb537488beec5))
+
+
+### Documentation
+
+* document every public item in depth ([13f2add](https://github.com/butlerx/tower-telemetry/commit/13f2add4040e310b27a6f412da4e558f7ada1d3b))
+* install, MSRV and full examples in the README ([#2](https://github.com/butlerx/tower-telemetry/issues/2)) ([b834e76](https://github.com/butlerx/tower-telemetry/commit/b834e764a38afd072040397515578f526819734d))
+* messaging guide, and HEALTHCHECK_PATHS matching ([#4](https://github.com/butlerx/tower-telemetry/issues/4)) ([87c6e7e](https://github.com/butlerx/tower-telemetry/commit/87c6e7e040228c1d1c262100263324d464315791))
+
 ## 0.0.0 (2026-11-16)
 
 First release.
