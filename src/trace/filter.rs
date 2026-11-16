@@ -51,8 +51,52 @@ pub struct NoOpFilter;
 
 impl RequestFilter for NoOpFilter {}
 
-/// The paths [`HealthcheckFilter`] leaves out, matched exactly (a trailing
-/// slash is ignored).
+/// The request paths [`HealthcheckFilter`] leaves out of tracing.
+///
+/// | Path           | Commonly used for                               |
+/// | -------------- | ----------------------------------------------- |
+/// | `/health`      | load balancer and container health checks       |
+/// | `/ready`       | readiness checks                                |
+/// | `/healthz`     | Kubernetes-style liveness and health probes     |
+/// | `/healthcheck` | load balancer target group health checks        |
+///
+/// # Matching
+///
+/// A request matches when its path is one of these exactly:
+///
+/// - A single trailing slash is ignored: `/health/` matches.
+/// - The query string is ignored: `/health?verbose=1` matches.
+/// - Case matters: `/Health` doesn't match.
+/// - Prefixes and suffixes don't match: `/api/health`, `/health/db` and
+///   `/healthy` are all traced. If your service is mounted under a prefix,
+///   its health path won't match.
+///
+/// Only the path is checked, not axum's matched route, so a request matches
+/// whether or not a route handles it.
+///
+/// # Adding paths
+///
+/// To skip more paths, write your own [`RequestFilter`] that checks them and
+/// then falls back to [`HealthcheckFilter`]:
+///
+/// ```
+/// use http::Request;
+/// use tower_telemetry::{HealthcheckFilter, RequestFilter};
+///
+/// #[derive(Debug, Clone, Copy, Default)]
+/// struct ProbeFilter;
+///
+/// impl RequestFilter for ProbeFilter {
+///     fn should_ignore<B>(request: &Request<B>) -> bool {
+///         matches!(request.uri().path(), "/livez" | "/readyz" | "/api/health")
+///             || HealthcheckFilter::should_ignore(request)
+///     }
+/// }
+/// # let request = |path| Request::get(path).body(()).expect("static request");
+/// # assert!(ProbeFilter::should_ignore(&request("/api/health")));
+/// # assert!(ProbeFilter::should_ignore(&request("/healthz/?probe=1")));
+/// # assert!(!ProbeFilter::should_ignore(&request("/Health")));
+/// ```
 pub const HEALTHCHECK_PATHS: [&str; 4] = ["/health", "/ready", "/healthz", "/healthcheck"];
 
 /// The user-agent prefixes of well-known health checkers, which
