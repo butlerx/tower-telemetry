@@ -1,0 +1,79 @@
+[package]
+name         = "tower-telemetry"
+version      = "0.0.0"
+edition      = "2024"
+rust-version = "1.85"
+description  = "OpenTelemetry HTTP and messaging spans and HTTP metrics as Tower layers, for hyper and axum servers and message consumers."
+keywords     = ["axum", "hyper", "messaging", "opentelemetry", "tower"]
+categories   = ["development-tools::debugging", "web-programming::http-server"]
+authors      = ["Cian Butler <butlerx@notthe.cloud>"]
+readme       = "README.md"
+license      = "MIT"
+repository   = "https://github.com/butlerx/tower-telemetry"
+
+[package.metadata.docs.rs]
+all-features = true
+
+[features]
+default         = ["metrics", "trace"]
+# Name spans and metrics by axum's matched route.
+axum            = ["dep:axum"]
+# `messaging`: messaging spans and `MessageTraceLayer` for consumers.
+messaging       = ["dep:opentelemetry", "dep:tracing", "dep:tracing-opentelemetry"]
+# `HttpMetricsLayer` and the panic counter, through the `metrics` facade.
+metrics         = ["dep:bytes", "dep:metrics"]
+# `export_runtime_metrics`: Tokio runtime metrics, sampled once a second.
+runtime-metrics = ["dep:tokio", "dep:tokio-metrics", "metrics"]
+# `OtelTraceLayer`: one OpenTelemetry server span per request.
+trace           = ["dep:opentelemetry", "dep:opentelemetry-http", "dep:tracing", "dep:tracing-opentelemetry"]
+
+[[example]]
+name              = "axum"
+required-features = ["axum", "metrics", "trace"]
+
+[[example]]
+name              = "hyper"
+required-features = ["metrics", "trace"]
+
+[[test]]
+name              = "messaging"
+required-features = ["messaging"]
+
+[dependencies]
+axum                  = { version = "0.8.9", default-features = false, features = ["matched-path"], optional = true }
+bytes                 = { version = "1", optional = true }
+http                  = "1"
+http-body             = "1"
+metrics               = { version = "0.24.6", default-features = false, optional = true }
+opentelemetry         = { version = "0.33.1", default-features = false, features = ["trace"], optional = true }
+opentelemetry-http    = { version = "0.33.1", default-features = false, optional = true }
+pin-project-lite      = "0.2"
+tokio                 = { version = "1.54.1", default-features = false, features = ["rt", "time"], optional = true }
+tokio-metrics         = { version = "0.5.2", default-features = false, features = ["rt"], optional = true }
+tower-layer           = "0.3"
+tower-service         = "0.3"
+tracing               = { version = "0.1", default-features = false, features = ["std"], optional = true }
+tracing-opentelemetry = { version = "0.34.0", default-features = false, optional = true }
+
+[dev-dependencies]
+axum                        = { version = "0.8.9", features = ["http1", "tokio"] }
+bytes                       = "1"
+http-body-util              = "0.1"
+hyper                       = { version = "1", features = ["http1", "server"] }
+hyper-util                  = { version = "0.1", features = ["service", "tokio"] }
+metrics-exporter-prometheus = { version = "0.18.3", default-features = false }
+metrics-util                = { version = "0.20", features = ["debugging"] }
+opentelemetry               = "0.33"
+opentelemetry_sdk           = { version = "0.33", features = ["testing", "trace"] }
+tokio                       = { version = "1", features = ["full"] }
+tower                       = { version = "0.5", features = ["util"] }
+tracing-opentelemetry       = "0.34"
+tracing-subscriber          = { version = "0.3", features = ["registry"] }
+
+[lints.clippy]
+all      = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+
+[lints.rust]
+missing_docs = "warn"
+unsafe_code  = "deny"
