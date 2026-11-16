@@ -2,23 +2,36 @@
 
 use std::fmt::{self, Display};
 
-/// What a messaging span covers (`messaging.operation.type`).
+/// The kind of operation a messaging span covers: its
+/// `messaging.operation.type`, which also decides its span kind.
+///
+/// Pick the one that matches what the client call does, whatever the broker
+/// calls it; record the broker's own name with
+/// [`MessagingSpan::operation_name`](super::MessagingSpan::operation_name).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MessagingOperation {
-    /// Creating a message to send later, e.g. adding it to a batch.
+    /// Creating a message to send later, as part of a batch: one span per
+    /// message, each linked from the `Send` span that publishes the batch. Kind
+    /// `producer`.
     Create,
-    /// Sending one or more messages to a broker.
+    /// Sending one or more messages to the broker: `SendMessage`, `produce`,
+    /// `publish`. Kind `producer`.
     Send,
-    /// Pulling one or more messages from a broker.
+    /// Pulling one or more messages from the broker: `ReceiveMessage`, `poll`,
+    /// `fetch`. Kind `client`.
     Receive,
-    /// Handling a message, whether pushed or pulled.
+    /// Handling one message, whether it was pushed to you or you pulled it.
+    /// [`MessageTraceLayer`](super::MessageTraceLayer) makes these. Kind
+    /// `consumer`.
     Process,
-    /// Acknowledging, rejecting or otherwise settling a message.
+    /// Telling the broker what became of a message: acknowledging, deleting,
+    /// rejecting, or extending its visibility. Kind `client`.
     Settle,
 }
 
 impl MessagingOperation {
-    /// The `messaging.operation.type` value.
+    /// The `messaging.operation.type` value: `create`, `send`, `receive`,
+    /// `process` or `settle`. Also the first word of the span's name.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {

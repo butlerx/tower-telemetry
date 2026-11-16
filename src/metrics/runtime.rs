@@ -13,15 +13,72 @@ use tokio_metrics::{RuntimeMetrics, RuntimeMonitor};
 /// How often the runtime is sampled.
 const INTERVAL: Duration = Duration::from_secs(1);
 
-/// Sample the current Tokio runtime once a second, for as long as it runs:
-/// `tokio_runtime_workers`, `tokio_runtime_live_tasks`,
-/// `tokio_runtime_global_queue_depth`, `tokio_runtime_worker_busy_ratio`
-/// (mean, `_max` and `_min`), `tokio_runtime_worker_busy_microseconds_total`
-/// and `tokio_runtime_worker_parks_total`.
+/// Sample the current Tokio runtime once a second, for as long as it runs,
+/// and record what it's doing through the [`metrics`] facade.
+///
+/// Spawns a task on the current runtime and returns its handle. Call it
+/// once per runtime, inside it, after installing your `metrics` exporter:
+///
+/// ```
+/// use tower_telemetry::metrics::export_runtime_metrics;
+///
+/// #[tokio::main]
+/// async fn main() {
+///     // install a `metrics` exporter first
+///     let sampler = export_runtime_metrics();
+///     // ... serve until shutdown ...
+///     sampler.abort();
+/// }
+/// ```
+///
+/// # Metrics
+///
+/// None have labels: add your service's and environment's as the exporter's
+/// global labels. The first sample is taken a second after the call.
+///
+/// | Name                                          | Type    | What it is                                         |
+/// | --------------------------------------------- | ------- | -------------------------------------------------- |
+/// | `tokio_runtime_workers`                       | gauge   | worker threads                                     |
+/// | `tokio_runtime_live_tasks`                    | gauge   | tasks spawned and not yet finished                 |
+/// | `tokio_runtime_global_queue_depth`            | gauge   | tasks waiting in the global queue for a worker    |
+/// | `tokio_runtime_worker_busy_ratio`             | gauge   | share of the last second the average worker was busy, 0 to 1 |
+/// | `tokio_runtime_worker_busy_ratio_max`         | gauge   | the same for the busiest worker                    |
+/// | `tokio_runtime_worker_busy_ratio_min`         | gauge   | the same for the least busy worker                 |
+/// | `tokio_runtime_worker_busy_microseconds_total` | counter | time workers have spent busy, summed over workers |
+/// | `tokio_runtime_worker_parks_total`            | counter | times workers have parked, with nothing to do     |
+///
+/// # Reading them
+///
+/// - **Saturation:** a mean busy ratio near 1 means the runtime has no
+///   spare capacity; it's a good signal to autoscale on, better than CPU,
+///   which also counts blocking threads and other processes.
+/// - **Blocking:** one worker's `_max` pinned at 1 while the mean stays low
+///   points to a task blocking its thread (synchronous I/O, a long
+///   computation, a held lock).
+/// - **Backlog:** a growing `global_queue_depth` means tasks are spawned
+///   faster than workers pick them up.
+/// - **Leaks:** `live_tasks` that only climbs points to tasks that never
+///   finish.
+///
+/// Rates of the counters (`rate(...[1m])` in Prometheus) give busy time per
+/// second, across all workers, and parks per second.
+///
+/// # Limits
+///
+/// Only metrics Tokio exposes on stable Rust are recorded. Poll counts,
+/// steals, local queue depths and scheduling delays need the
+/// `tokio_unstable` cfg and aren't sampled. Calling this twice on one
+/// runtime double-counts the counters, and samplers on two runtimes write to
+/// the same unlabelled series.
+///
+/// The task stops by itself when the runtime shuts down. Abort the handle
+/// to stop it sooner; dropping it leaves the task running.
 ///
 /// # Panics
 ///
 /// Panics when called outside a Tokio runtime.
+///
+/// [`metrics`]: ::metrics
 #[must_use = "dropping the handle detaches the sampler; keep it to abort it"]
 pub fn export_runtime_metrics() -> JoinHandle<()> {
     let monitor = RuntimeMonitor::new(&Handle::current());
