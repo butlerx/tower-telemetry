@@ -47,8 +47,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "/users/{id}",
             get(|Path(id): Path<u64>| async move { format!("user {id}") }),
         )
-        .layer(HttpMetricsLayer::new())
-        .layer(OtelTraceLayer::<PropagatingSpanDecorator, HealthcheckFilter>::with_types())
+        .layer(HttpMetricsLayer::default())
+        .layer(OtelTraceLayer::<PropagatingSpanDecorator, HealthcheckFilter>::default())
         // Outside the layers: scrapes are neither traced nor counted.
         .route("/metrics", get(move || async move { handle.render() }));
 

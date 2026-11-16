@@ -25,8 +25,8 @@ use tower_telemetry::{HttpMetricsLayer, OtelTraceLayer};
 
 let app: Router = Router::new()
     .route("/users/{id}", get(|| async { "hello" }))
-    .layer(HttpMetricsLayer::new())
-    .layer(OtelTraceLayer::new());
+    .layer(HttpMetricsLayer::default())
+    .layer(<OtelTraceLayer>::default());
 ```
 
 Add the layers with `Router::layer` so the matched route is known. See [`examples/axum.rs`](examples/axum.rs) for tracer and Prometheus setup.
@@ -43,7 +43,7 @@ The layers are plain Tower middleware. Wrap your service with `ServiceBuilder` a
 use tower_telemetry::{HealthcheckFilter, OtelTraceLayer, PropagatingSpanDecorator};
 
 // Return `traceparent` to callers and skip AWS load balancer health checks.
-let layer = OtelTraceLayer::<PropagatingSpanDecorator, HealthcheckFilter>::with_types();
+let layer = OtelTraceLayer::<PropagatingSpanDecorator, HealthcheckFilter>::default();
 ```
 
 ## HTTP metrics
@@ -57,7 +57,7 @@ let layer = OtelTraceLayer::<PropagatingSpanDecorator, HealthcheckFilter>::with_
 | `http_server_response_body_size_bytes`   | histogram | bytes actually sent      |
 | `http_server_active_requests`            | gauge     | until body finished      |
 
-Labels: `method`, `route`, `status_code`, `host` (opt-in with `with_host_label(true)`), plus any `MetricLabels` a handler puts in the response extensions. Rename metrics with `HttpMetricsLayer::new().with_names(MetricNames { .. })`. `DURATION_BUCKETS` and `BODY_SIZE_BUCKETS` are there for exporters that take histogram buckets.
+Labels: `method`, `route`, `status_code`, `host` (opt-in with `with_host_label(true)`), plus any `MetricLabels` a handler puts in the response extensions. Rename metrics with `HttpMetricsLayer::default().with_names(MetricNames { .. })`. `DURATION_BUCKETS` and `BODY_SIZE_BUCKETS` are there for exporters that take histogram buckets.
 
 ## Messaging
 

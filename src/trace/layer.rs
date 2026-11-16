@@ -31,38 +31,22 @@ use crate::request;
 /// ```
 /// use tower_telemetry::{HealthcheckFilter, OtelTraceLayer, PropagatingSpanDecorator};
 ///
-/// let default = OtelTraceLayer::new();
-/// let custom = OtelTraceLayer::<PropagatingSpanDecorator, HealthcheckFilter>::with_types();
+/// // The `DefaultSpanDecorator`, tracing every request.
+/// let default = <OtelTraceLayer>::default();
+/// let custom = OtelTraceLayer::<PropagatingSpanDecorator, HealthcheckFilter>::default();
 /// # let _ = (default, custom);
 /// ```
 pub struct OtelTraceLayer<D = DefaultSpanDecorator, F = NoOpFilter> {
     marker: PhantomData<fn() -> (D, F)>,
 }
 
-impl OtelTraceLayer {
-    /// A layer with the [`DefaultSpanDecorator`] that traces every request.
-    /// Pick other types with `OtelTraceLayer::<D, F>::with_types()`.
-    #[must_use]
-    pub const fn new() -> Self {
-        Self {
-            marker: PhantomData,
-        }
-    }
-}
-
-impl<D, F> OtelTraceLayer<D, F> {
-    /// A layer with the decorator `D` and filter `F`.
-    #[must_use]
-    pub const fn with_types() -> Self {
-        Self {
-            marker: PhantomData,
-        }
-    }
-}
-
+/// Write `<OtelTraceLayer>::default()` for the default types: in expression
+/// position, Rust doesn't fill in a type's default parameters.
 impl<D, F> Default for OtelTraceLayer<D, F> {
     fn default() -> Self {
-        Self::with_types()
+        Self {
+            marker: PhantomData,
+        }
     }
 }
 

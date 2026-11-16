@@ -56,16 +56,8 @@ pub struct HttpMetricsLayer {
     host_label: bool,
 }
 
+/// The default layer records under [`MetricNames::DEFAULT`], without `host`.
 impl HttpMetricsLayer {
-    /// A layer recording under [`MetricNames::DEFAULT`], without `host`.
-    #[must_use]
-    pub const fn new() -> Self {
-        Self {
-            names: MetricNames::DEFAULT,
-            host_label: false,
-        }
-    }
-
     /// Record under `names` instead.
     #[must_use]
     pub const fn with_names(self, names: MetricNames) -> Self {
@@ -306,7 +298,7 @@ mod tests {
         let _guard = ::metrics::set_default_local_recorder(&recorder);
 
         let service = ServiceBuilder::new()
-            .layer(HttpMetricsLayer::new())
+            .layer(HttpMetricsLayer::default())
             .service(service_fn(|_request: Request<()>| async {
                 let mut response = Response::new(Full::new(Bytes::from_static(b"hello")));
                 response

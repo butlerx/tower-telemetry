@@ -25,8 +25,8 @@
 //!
 //! let app: Router = Router::new()
 //!     .route("/users/{id}", get(|| async { "hello" }))
-//!     .layer(HttpMetricsLayer::new())
-//!     .layer(OtelTraceLayer::new());
+//!     .layer(HttpMetricsLayer::default())
+//!     .layer(<OtelTraceLayer>::default());
 //! # }
 //! ```
 //!

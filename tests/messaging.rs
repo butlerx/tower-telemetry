@@ -52,7 +52,7 @@ async fn consumer_continues_the_producers_trace() {
     assert!(headers.contains_key("traceparent"));
 
     ServiceBuilder::new()
-        .layer(MessageTraceLayer::new())
+        .layer(MessageTraceLayer)
         .service_fn(|_job: Job| async { Ok::<_, Infallible>(()) })
         .oneshot(Job { headers })
         .await

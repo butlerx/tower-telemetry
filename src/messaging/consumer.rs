@@ -63,20 +63,12 @@ pub trait Message {
 /// }
 ///
 /// let consumer = ServiceBuilder::new()
-///     .layer(MessageTraceLayer::new())
+///     .layer(MessageTraceLayer)
 ///     .service_fn(|job: Job| async move { Ok::<_, std::io::Error>(()) });
 /// # let _ = consumer;
 /// ```
 #[derive(Debug, Clone, Copy, Default)]
 pub struct MessageTraceLayer;
-
-impl MessageTraceLayer {
-    /// A layer tracing every message.
-    #[must_use]
-    pub const fn new() -> Self {
-        Self
-    }
-}
 
 impl<S> Layer<S> for MessageTraceLayer {
     type Service = MessageTraceService<S>;

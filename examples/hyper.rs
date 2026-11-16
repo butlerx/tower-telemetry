@@ -23,8 +23,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Install a `tracing` subscriber with `tracing-opentelemetry` and a
     // `metrics` exporter here; see `examples/axum.rs`.
     let service = ServiceBuilder::new()
-        .layer(OtelTraceLayer::new())
-        .layer(HttpMetricsLayer::new())
+        .layer(<OtelTraceLayer>::default())
+        .layer(HttpMetricsLayer::default())
         .service_fn(hello);
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:3000").await?;
