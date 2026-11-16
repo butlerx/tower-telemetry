@@ -46,6 +46,70 @@ use tower_telemetry::{HealthcheckFilter, OtelTraceLayer, PropagatingSpanDecorato
 let layer = OtelTraceLayer::<PropagatingSpanDecorator, HealthcheckFilter>::default();
 ```
 
+## Request filters
+
+A `RequestFilter` drops requests from tracing before their span is made. It doesn't affect metrics. Implement it on a unit struct:
+
+```rust
+use http::Request;
+use tower_telemetry::{DefaultSpanDecorator, HealthcheckFilter, OtelTraceLayer, RequestFilter};
+
+#[derive(Debug, Clone, Copy, Default)]
+struct SkipProbes;
+
+impl RequestFilter for SkipProbes {
+    fn should_ignore<B>(request: &Request<B>) -> bool {
+        matches!(request.uri().path(), "/healthz" | "/readyz")
+            || HealthcheckFilter::should_ignore(request)
+    }
+}
+
+let layer = OtelTraceLayer::<DefaultSpanDecorator, SkipProbes>::default();
+```
+
+It runs on every request, so match on the method, path and headers only.
+
+## Custom span attributes
+
+Set attributes with `OpenTelemetrySpanExt::set_attribute` from `tracing-opentelemetry`. Don't use `span.record("my.field", ..)`. A `tracing` span drops any field it didn't declare when it was created, without warning.
+
+From the request or response, in a `SpanDecorator`:
+
+```rust
+use http::{Request, Response};
+use tower_telemetry::{OtelTraceLayer, SpanDecorator, mark_server_errors};
+use tracing::Span;
+use tracing_opentelemetry::OpenTelemetrySpanExt;
+
+#[derive(Debug, Clone, Copy, Default)]
+struct TenantDecorator;
+
+impl SpanDecorator for TenantDecorator {
+    fn on_request<B>(request: &Request<B>, span: &Span) {
+        if let Some(tenant) = request.headers().get("x-tenant-id").and_then(|v| v.to_str().ok()) {
+            span.set_attribute("tenant.id", tenant.to_owned());
+        }
+    }
+
+    fn on_response<B>(span: &Span, _context: &opentelemetry::Context, response: &mut Response<B>) {
+        mark_server_errors(span, response); // keep 5xx marked as errors
+    }
+}
+
+let layer = OtelTraceLayer::<TenantDecorator>::default();
+```
+
+From a handler, for what only it knows: the span is in the request's extensions.
+
+```rust
+async fn handler(Extension(span): Extension<Span>) -> &'static str {
+    span.set_attribute("enduser.id", "42");
+    "hello"
+}
+```
+
+Messaging spans work the same way: call `set_attribute` on the `Span` that `MessagingSpan::start` returns.
+
 ## HTTP metrics
 
 | Default name                             | Type      | Recorded when            |

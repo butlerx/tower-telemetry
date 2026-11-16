@@ -10,6 +10,84 @@ use crate::request;
 
 /// How a service names and enriches its request spans. Every method has a
 /// default, so a decorator overrides only what it changes.
+///
+/// Implement it on a unit struct and pass it as the layer's first type
+/// parameter.
+///
+/// # Custom attributes
+///
+/// Add attributes with [`OpenTelemetrySpanExt::set_attribute`]. Don't use
+/// `span.record`: a `tracing` span only records fields declared when it was
+/// created, and silently drops any others.
+///
+/// Attributes from the request go in [`on_request`](Self::on_request), and
+/// attributes from the response in [`on_response`](Self::on_response). Call
+/// [`mark_server_errors`] there to keep marking `5xx` responses as errors.
+///
+/// ```
+/// use http::{Request, Response};
+/// use tower_telemetry::{OtelTraceLayer, SpanDecorator, mark_server_errors};
+/// use tracing::Span;
+/// use tracing_opentelemetry::OpenTelemetrySpanExt;
+///
+/// #[derive(Debug, Clone, Copy, Default)]
+/// struct TenantDecorator;
+///
+/// impl SpanDecorator for TenantDecorator {
+///     fn on_request<B>(request: &Request<B>, span: &Span) {
+///         if let Some(tenant) = request
+///             .headers()
+///             .get("x-tenant-id")
+///             .and_then(|value| value.to_str().ok())
+///         {
+///             span.set_attribute("tenant.id", tenant.to_owned());
+///         }
+///     }
+///
+///     fn on_response<B>(span: &Span, _context: &opentelemetry::Context, response: &mut Response<B>) {
+///         if let Some(cache) = response
+///             .headers()
+///             .get("x-cache")
+///             .and_then(|value| value.to_str().ok())
+///         {
+///             span.set_attribute("http.response.header.x-cache", cache.to_owned());
+///         }
+///         mark_server_errors(span, response);
+///     }
+/// }
+///
+/// let layer = OtelTraceLayer::<TenantDecorator>::default();
+/// # let _ = layer;
+/// ```
+///
+/// # Attributes only a handler knows
+///
+/// The layer puts the request's span in the request's extensions, so a
+/// handler can add what it learns itself, such as the user it authenticated.
+/// In axum:
+///
+/// ```
+/// # #[cfg(feature = "axum")] {
+/// use axum::Extension;
+/// use tracing::Span;
+/// use tracing_opentelemetry::OpenTelemetrySpanExt;
+///
+/// async fn handler(Extension(span): Extension<Span>) -> &'static str {
+///     span.set_attribute("enduser.id", "42");
+///     "hello"
+/// }
+/// # }
+/// ```
+///
+/// # Span names
+///
+/// Override [`span_name`](Self::span_name) for a different name. Keep it low
+/// cardinality: a route or operation, never an identifier.
+///
+/// Attributes are about traces. For metric labels, see
+/// [`MetricLabels`](crate::MetricLabels).
+///
+/// [`OpenTelemetrySpanExt::set_attribute`]: tracing_opentelemetry::OpenTelemetrySpanExt::set_attribute
 pub trait SpanDecorator {
     /// The span's name (`otel.name`): `"{method} {route}"` when a route
     /// matched, else `"{method}"`, which allocates nothing. Never the raw

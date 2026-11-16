@@ -6,6 +6,38 @@ use http::header::USER_AGENT;
 use crate::request;
 
 /// Which requests to leave out of tracing.
+///
+/// Implement it on a unit struct and pass it as the layer's second type
+/// parameter. It decides from the request alone, before the span exists, so
+/// it costs nothing for the requests it drops: they get a disabled span
+/// ([`Span::none`](tracing::Span::none)), and nothing is recorded or exported.
+/// It filters traces only; [`HttpMetricsLayer`](crate::HttpMetricsLayer)
+/// still counts the request.
+///
+/// Leave out probes by path, and AWS health checks by user agent:
+///
+/// ```
+/// use http::Request;
+/// use tower_telemetry::{DefaultSpanDecorator, HealthcheckFilter, OtelTraceLayer, RequestFilter};
+///
+/// #[derive(Debug, Clone, Copy, Default)]
+/// struct SkipProbes;
+///
+/// impl RequestFilter for SkipProbes {
+///     fn should_ignore<B>(request: &Request<B>) -> bool {
+///         matches!(request.uri().path(), "/healthz" | "/readyz")
+///             || HealthcheckFilter::should_ignore(request)
+///     }
+/// }
+///
+/// let layer = OtelTraceLayer::<DefaultSpanDecorator, SkipProbes>::default();
+/// # let _ = layer;
+/// # assert!(SkipProbes::should_ignore(&Request::get("/healthz").body(()).unwrap()));
+/// # assert!(!SkipProbes::should_ignore(&Request::get("/users").body(()).unwrap()));
+/// ```
+///
+/// Keep it cheap: it runs on every request. Match on the method, path and
+/// headers; don't parse bodies or do I/O.
 pub trait RequestFilter {
     /// `true` to leave the request out. Default: trace every request.
     fn should_ignore<B>(_request: &Request<B>) -> bool {

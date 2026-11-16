@@ -31,6 +31,10 @@ trace           = ["dep:opentelemetry", "dep:opentelemetry-http", "dep:tracing",
 name              = "axum"
 required-features = ["axum", "metrics", "trace"]
 
+[[test]]
+name              = "trace"
+required-features = ["trace"]
+
 [[example]]
 name              = "hyper"
 required-features = ["metrics", "trace"]
