@@ -20,13 +20,19 @@ default         = ["metrics", "trace"]
 # Name spans and metrics by axum's matched route.
 axum            = ["dep:axum"]
 # `messaging`: messaging spans and `MessageTraceLayer` for consumers.
-messaging       = ["dep:opentelemetry", "dep:tracing", "dep:tracing-opentelemetry"]
+messaging       = ["dep:opentelemetry", "dep:opentelemetry-semantic-conventions", "dep:tracing", "dep:tracing-opentelemetry"]
 # `HttpMetricsLayer` and the panic counter, through the `metrics` facade.
 metrics         = ["dep:bytes", "dep:metrics"]
 # `export_runtime_metrics`: Tokio runtime metrics, sampled once a second.
 runtime-metrics = ["dep:tokio", "dep:tokio-metrics", "metrics"]
 # `OtelTraceLayer`: one OpenTelemetry server span per request.
-trace           = ["dep:opentelemetry", "dep:opentelemetry-http", "dep:tracing", "dep:tracing-opentelemetry"]
+trace           = [
+  "dep:opentelemetry",
+  "dep:opentelemetry-http",
+  "dep:opentelemetry-semantic-conventions",
+  "dep:tracing",
+  "dep:tracing-opentelemetry",
+]
 
 [[example]]
 name              = "axum"
@@ -45,20 +51,21 @@ name              = "messaging"
 required-features = ["messaging"]
 
 [dependencies]
-axum                  = { version = "0.8.9", default-features = false, features = ["matched-path"], optional = true }
-bytes                 = { version = "1", optional = true }
-http                  = "1"
-http-body             = "1"
-metrics               = { version = "0.24.6", default-features = false, optional = true }
-opentelemetry         = { version = "0.33.1", default-features = false, features = ["trace"], optional = true }
-opentelemetry-http    = { version = "0.33.1", default-features = false, optional = true }
-pin-project-lite      = "0.2"
-tokio                 = { version = "1.54.1", default-features = false, features = ["rt", "time"], optional = true }
-tokio-metrics         = { version = "0.5.2", default-features = false, features = ["rt"], optional = true }
-tower-layer           = "0.3"
-tower-service         = "0.3"
-tracing               = { version = "0.1", default-features = false, features = ["std"], optional = true }
-tracing-opentelemetry = { version = "0.34.0", default-features = false, optional = true }
+axum                               = { version = "0.8.9", default-features = false, features = ["matched-path"], optional = true }
+bytes                              = { version = "1", optional = true }
+http                               = "1"
+http-body                          = "1"
+metrics                            = { version = "0.24.6", default-features = false, optional = true }
+opentelemetry                      = { version = "0.33.1", default-features = false, features = ["trace"], optional = true }
+opentelemetry-http                 = { version = "0.33.1", default-features = false, optional = true }
+opentelemetry-semantic-conventions = { version = "0.33.1", default-features = false, features = ["semconv_experimental"], optional = true }
+pin-project-lite                   = "0.2"
+tokio                              = { version = "1.54.1", default-features = false, features = ["rt", "time"], optional = true }
+tokio-metrics                      = { version = "0.5.2", default-features = false, features = ["rt"], optional = true }
+tower-layer                        = "0.3"
+tower-service                      = "0.3"
+tracing                            = { version = "0.1", default-features = false, features = ["std"], optional = true }
+tracing-opentelemetry              = { version = "0.34.0", default-features = false, optional = true }
 
 [dev-dependencies]
 axum                        = { version = "0.8.9", features = ["http1", "tokio"] }

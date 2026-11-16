@@ -5,6 +5,13 @@ use tracing::field::Empty;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use super::MessagingOperation;
+use crate::attribute::{
+    ERROR_TYPE, EXCEPTION_MESSAGE, MESSAGING_BATCH_MESSAGE_COUNT, MESSAGING_CONSUMER_GROUP_NAME,
+    MESSAGING_DESTINATION_NAME, MESSAGING_DESTINATION_TEMPLATE, MESSAGING_MESSAGE_BODY_SIZE,
+    MESSAGING_MESSAGE_CONVERSATION_ID, MESSAGING_MESSAGE_ID, MESSAGING_OPERATION_NAME,
+    MESSAGING_OPERATION_TYPE, MESSAGING_SYSTEM, OTEL_KIND, OTEL_NAME, OTEL_STATUS_CODE,
+    SERVER_ADDRESS, SERVER_PORT, int,
+};
 
 /// A messaging span's attributes. Build one with [`MessagingSpan::new`],
 /// set what the client knows, then [`start`](Self::start) it.
@@ -133,8 +140,9 @@ impl<'a> MessagingSpan<'a> {
 
     /// The number of messages, for spans covering more than one
     /// (`messaging.batch.message_count`). For a `receive` span, the count is only
-    /// known after the pull: record it then with
-    /// `span.record("messaging.batch.message_count", count)`.
+    /// known after the pull: record it then, as an `i64` (`tracing-opentelemetry`
+    /// exports a `u64` as a string), with
+    /// `span.record("messaging.batch.message_count", count as i64)`.
     pub fn batch_message_count(self, count: u64) -> Self {
         Self {
             batch_message_count: Some(count),
@@ -198,23 +206,23 @@ impl<'a> MessagingSpan<'a> {
         let span = tracing::info_span!(
             target: "tower_telemetry::messaging",
             "messaging",
-            otel.name = self.name(),
-            otel.kind = self.operation.span_kind(),
-            otel.status_code = Empty,
-            messaging.system = self.system,
-            messaging.operation.type = self.operation.as_str(),
-            messaging.operation.name = self.operation_name.unwrap_or(self.operation.as_str()),
-            messaging.destination.name = self.destination,
-            messaging.destination.template = self.destination_template,
-            messaging.message.id = self.message_id,
-            messaging.message.conversation_id = self.conversation_id,
-            messaging.message.body.size = self.body_size,
-            messaging.batch.message_count = self.batch_message_count,
-            messaging.consumer.group.name = self.consumer_group,
-            server.address = self.server_address,
-            server.port = self.server_port,
-            error.type = Empty,
-            exception.message = Empty,
+            { OTEL_NAME } = self.name(),
+            { OTEL_KIND } = self.operation.span_kind(),
+            { OTEL_STATUS_CODE } = Empty,
+            { MESSAGING_SYSTEM } = self.system,
+            { MESSAGING_OPERATION_TYPE } = self.operation.as_str(),
+            { MESSAGING_OPERATION_NAME } = self.operation_name.unwrap_or(self.operation.as_str()),
+            { MESSAGING_DESTINATION_NAME } = self.destination,
+            { MESSAGING_DESTINATION_TEMPLATE } = self.destination_template,
+            { MESSAGING_MESSAGE_ID } = self.message_id,
+            { MESSAGING_MESSAGE_CONVERSATION_ID } = self.conversation_id,
+            { MESSAGING_MESSAGE_BODY_SIZE } = self.body_size.map(int),
+            { MESSAGING_BATCH_MESSAGE_COUNT } = self.batch_message_count.map(int),
+            { MESSAGING_CONSUMER_GROUP_NAME } = self.consumer_group,
+            { SERVER_ADDRESS } = self.server_address,
+            { SERVER_PORT } = self.server_port.map(int),
+            { ERROR_TYPE } = Empty,
+            { EXCEPTION_MESSAGE } = Empty,
         );
         if let Some(parent) = self.parent
             && let Err(err) = span.set_parent(parent)

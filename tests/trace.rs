@@ -7,6 +7,9 @@ use http::{Request, Response};
 use opentelemetry::trace::TracerProvider as _;
 use opentelemetry::{Key, Value};
 use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider};
+use opentelemetry_semantic_conventions::attribute::{
+    HTTP_REQUEST_METHOD, HTTP_RESPONSE_STATUS_CODE, URL_PATH,
+};
 use tower::{ServiceBuilder, ServiceExt};
 use tower_telemetry::{OtelTraceLayer, RequestFilter, SpanDecorator, mark_server_errors};
 use tracing::Span;
@@ -82,5 +85,11 @@ async fn filters_requests_and_records_custom_attributes() {
     };
     assert_eq!(attribute("tenant.id"), Some(Value::from("acme")));
     assert_eq!(attribute("app.handled"), Some(Value::from(true)));
-    assert_eq!(attribute("url.path"), Some(Value::from("/users")));
+    assert_eq!(attribute(URL_PATH), Some(Value::from("/users")));
+    assert_eq!(attribute(HTTP_REQUEST_METHOD), Some(Value::from("GET")));
+    assert_eq!(attribute(HTTP_RESPONSE_STATUS_CODE), Some(Value::from(200)));
+    assert!(
+        matches!(attribute("http.server.time_to_first_byte"), Some(Value::F64(seconds)) if seconds >= 0.0),
+        "time to first byte is recorded in seconds"
+    );
 }

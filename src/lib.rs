@@ -153,6 +153,8 @@
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
+#[cfg(any(feature = "trace", feature = "messaging"))]
+mod attribute;
 #[cfg(feature = "messaging")]
 pub mod messaging;
 #[cfg(feature = "metrics")]

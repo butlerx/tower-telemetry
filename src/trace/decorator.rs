@@ -6,6 +6,7 @@ use http::{Request, Response};
 use opentelemetry_http::HeaderInjector;
 use tracing::Span;
 
+use crate::attribute::OTEL_STATUS_CODE;
 use crate::request;
 
 /// How a service names and enriches its request spans. Every method has a
@@ -125,7 +126,7 @@ pub trait SpanDecorator {
 /// `on_response` to keep that behaviour.
 pub fn mark_server_errors<B>(span: &Span, response: &Response<B>) {
     span.record(
-        "otel.status_code",
+        OTEL_STATUS_CODE,
         if response.status().is_server_error() {
             "ERROR"
         } else {
