@@ -1,11 +1,26 @@
 # tower-telemetry
 
+[![crates.io](https://img.shields.io/crates/v/tower-telemetry.svg)](https://crates.io/crates/tower-telemetry)
+[![docs.rs](https://img.shields.io/docsrs/tower-telemetry)](https://docs.rs/tower-telemetry)
+[![CI](https://github.com/butlerx/tower-telemetry/actions/workflows/ci.yml/badge.svg)](https://github.com/butlerx/tower-telemetry/actions/workflows/ci.yml)
+[![MIT](https://img.shields.io/crates/l/tower-telemetry.svg)](LICENSE)
+
 OpenTelemetry spans and metrics as [Tower](https://docs.rs/tower) layers:
 
 - **HTTP**: one server span per request, plus request metrics, for [axum](https://docs.rs/axum) and plain [hyper](https://docs.rs/hyper).
 - **Messaging**: spans for any broker (SQS, Kafka, NATS, ...), trace context carried in message headers, and a layer for consumers.
 
 Spans follow OpenTelemetry's [HTTP](https://opentelemetry.io/docs/specs/semconv/http/http-spans/) and [messaging](https://opentelemetry.io/docs/specs/semconv/messaging/messaging-spans/) conventions and go through [`tracing`](https://docs.rs/tracing). Export them with [`tracing-opentelemetry`](https://docs.rs/tracing-opentelemetry). Metrics go through the [`metrics`](https://docs.rs/metrics) facade. Install any exporter you like.
+
+## Install
+
+```sh
+cargo add tower-telemetry                      # HTTP spans and metrics
+cargo add tower-telemetry --features axum      # name them by axum's matched route
+cargo add tower-telemetry --features messaging # messaging spans
+```
+
+Needs Rust 1.88 or later.
 
 ## Features
 
@@ -123,7 +138,33 @@ Messaging spans work the same way: call `set_attribute` on the `Span` that `Mess
 | `http_server_response_body_size_bytes`   | histogram | bytes actually sent      |
 | `http_server_active_requests`            | gauge     | until body finished      |
 
-Labels: `method`, `route`, `status_code`, `host` (opt-in with `with_host_label(true)`), plus any `MetricLabels` a handler puts in the response extensions. Rename metrics with `HttpMetricsLayer::default().with_names(MetricNames { .. })`. `DURATION_BUCKETS` and `BODY_SIZE_BUCKETS` are there for exporters that take histogram buckets.
+Labels: `method`, `route`, `status_code` and, opt-in with `with_host_label(true)`, `host`. Add your own from a handler with `MetricLabels` in the response extensions. Keep their values few, since every distinct set is a new time series:
+
+```rust
+response
+    .extensions_mut()
+    .insert(MetricLabels(vec![("tenant", "acme".into())]));
+```
+
+Rename metrics to match existing dashboards:
+
+```rust
+let layer = HttpMetricsLayer::default().with_names(MetricNames {
+    requests: "request_count",
+    ..MetricNames::DEFAULT
+});
+```
+
+This crate records but doesn't export: install any `metrics` exporter once per process. For exporters that take histogram buckets, `DURATION_BUCKETS` and `BODY_SIZE_BUCKETS` cover 1 ms to 5 minutes and 100 B to 10 GB.
+
+## Process metrics
+
+```rust
+use tower_telemetry::metrics::{export_runtime_metrics, install_panic_counter};
+
+install_panic_counter("process_panics_total"); // counts panics, then runs the previous hook
+let sampler = export_runtime_metrics();        // `runtime-metrics`: tokio_runtime_* gauges, every second
+```
 
 ## Messaging
 
@@ -140,7 +181,38 @@ let span = MessagingSpan::new("aws_sqs", MessagingOperation::Send)
 inject_context(&span, &mut headers); // send `headers` with the message
 ```
 
-Consumer: implement `Message` for your message type and wrap your handler in `MessageTraceLayer`. Each message gets a `process orders` span that continues the producer's trace. For batches, `link_producers` links a span to each message's producer.
+Consumer: implement `Message` for your message type and wrap your handler in `MessageTraceLayer`. Each message gets a `process orders` span that continues the producer's trace:
+
+```rust
+use std::collections::HashMap;
+use tower::ServiceBuilder;
+use tower_telemetry::messaging::{Message, MessageTraceLayer, extract_context};
+
+struct Job {
+    queue: String,
+    headers: HashMap<String, String>,
+}
+
+impl Message for Job {
+    fn system(&self) -> &str {
+        "aws_sqs"
+    }
+
+    fn destination(&self) -> Option<&str> {
+        Some(&self.queue)
+    }
+
+    fn context(&self) -> opentelemetry::Context {
+        extract_context(&self.headers)
+    }
+}
+
+let consumer = ServiceBuilder::new()
+    .layer(MessageTraceLayer)
+    .service_fn(|job: Job| async move { Ok::<_, std::io::Error>(()) });
+```
+
+A span that covers a batch can link to each message's producer with `link_producers`. Pulling (`receive`) and acknowledging (`settle`) get their own spans from `MessagingSpan`.
 
 ## Forwarding headers
 
