@@ -40,6 +40,8 @@
 //! [axum]: https://docs.rs/axum
 //! [`metrics`]: ::metrics
 
+#![cfg_attr(docsrs, feature(doc_cfg))]
+
 #[cfg(feature = "messaging")]
 pub mod messaging;
 #[cfg(feature = "metrics")]

@@ -52,7 +52,9 @@ pub struct MetricLabels(pub Vec<(&'static str, Cow<'static, str>)>);
 /// so the matched route is known.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct HttpMetricsLayer {
+    /// The names to record under.
     names: MetricNames,
+    /// Whether to label metrics with the request's host.
     host_label: bool,
 }
 
@@ -87,7 +89,9 @@ impl<S> Layer<S> for HttpMetricsLayer {
 /// The service [`HttpMetricsLayer`] wraps around an inner service.
 #[derive(Debug, Clone)]
 pub struct HttpMetricsService<S> {
+    /// The wrapped service.
     inner: S,
+    /// The layer's settings, copied into each request's recorder.
     layer: HttpMetricsLayer,
 }
 
@@ -136,6 +140,7 @@ where
 struct Active(&'static str);
 
 impl Active {
+    /// Count one more request in the gauge `name`.
     fn new(name: &'static str) -> Self {
         gauge!(name).increment(1);
         Self(name)
@@ -151,10 +156,16 @@ impl Drop for Active {
 /// A request's labels and timings, carried from the request to the end of
 /// its response body. Records `duration` and `response_body_size` on drop.
 struct Recorder {
+    /// The names to record under.
     names: MetricNames,
+    /// The request's labels; the status code and any [`MetricLabels`] are
+    /// added once the response headers are ready.
     labels: Vec<Label>,
+    /// When the request arrived.
     started: Instant,
+    /// The declared request body size, from `Content-Length`.
     request_body_size: Option<u64>,
+    /// Response body bytes sent so far.
     response_body_size: u64,
     /// Held only for its `Drop`.
     _active: Active,
@@ -206,8 +217,10 @@ impl Drop for Recorder {
 pin_project_lite::pin_project! {
     /// Response future for [`HttpMetricsService`].
     pub struct MetricsFuture<F> {
+        // The inner service's response future.
         #[pin]
         inner: F,
+        // Taken when the response is ready, and moved into its body.
         recorder: Option<Recorder>,
     }
 }
@@ -243,8 +256,10 @@ pin_project_lite::pin_project! {
     /// Response body for [`HttpMetricsService`]: counts the bytes sent and
     /// records the request's duration when it finishes or is dropped.
     pub struct MetricsBody<B> {
+        // The inner response body.
         #[pin]
         inner: B,
+        // Taken, and so recorded, when the body finishes or fails.
         recorder: Option<Recorder>,
     }
 }

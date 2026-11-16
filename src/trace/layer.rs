@@ -37,6 +37,8 @@ use crate::request;
 /// # let _ = (default, custom);
 /// ```
 pub struct OtelTraceLayer<D = DefaultSpanDecorator, F = NoOpFilter> {
+    /// The decorator and filter types; `fn() -> _` keeps the layer `Send`,
+    /// `Sync` and `Copy` whatever they are.
     marker: PhantomData<fn() -> (D, F)>,
 }
 
@@ -80,7 +82,9 @@ impl<S, D, F> Layer<S> for OtelTraceLayer<D, F> {
 
 /// The service [`OtelTraceLayer`] wraps around an inner service.
 pub struct OtelTraceService<S, D = DefaultSpanDecorator, F = NoOpFilter> {
+    /// The wrapped service.
     inner: S,
+    /// The decorator and filter types.
     marker: PhantomData<fn() -> (D, F)>,
 }
 
@@ -138,10 +142,14 @@ pin_project_lite::pin_project! {
     /// Response future for [`OtelTraceService`]: polls the inner future
     /// inside the request span and records its outcome on the span.
     pub struct ResponseFuture<Fut, D> {
+        // The inner service's response future.
         #[pin]
         inner: Fut,
+        // The request's span; disabled for filtered-out requests.
         span: Span,
+        // When the request arrived, for time to first byte.
         started: Instant,
+        // The decorator that records the response.
         decorator: PhantomData<fn() -> D>,
     }
 }
@@ -192,6 +200,9 @@ where
     }
 }
 
+/// Start the request's span with OpenTelemetry's HTTP server fields,
+/// parented on a span in the request's extensions, else on the caller's
+/// trace context in its headers.
 fn make_span<B, D: SpanDecorator>(request: &Request<B>) -> Span {
     let headers = request.headers();
     let span = tracing::info_span!(

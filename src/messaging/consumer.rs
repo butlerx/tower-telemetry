@@ -81,6 +81,7 @@ impl<S> Layer<S> for MessageTraceLayer {
 /// The service [`MessageTraceLayer`] wraps around a consumer.
 #[derive(Debug, Clone)]
 pub struct MessageTraceService<S> {
+    /// The wrapped consumer.
     inner: S,
 }
 
@@ -118,8 +119,10 @@ where
 pin_project_lite::pin_project! {
     /// Response future for [`MessageTraceService`].
     pub struct MessageFuture<F> {
+        // The consumer's future.
         #[pin]
         inner: F,
+        // The message's `process` span.
         span: Span,
     }
 }

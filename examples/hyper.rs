@@ -14,6 +14,7 @@ use hyper_util::service::TowerToHyperService;
 use tower::ServiceBuilder;
 use tower_telemetry::{HttpMetricsLayer, OtelTraceLayer};
 
+/// Answers every request with `hello`.
 async fn hello(_request: Request<Incoming>) -> Result<Response<Full<Bytes>>, Infallible> {
     Ok(Response::new(Full::new(Bytes::from_static(b"hello"))))
 }

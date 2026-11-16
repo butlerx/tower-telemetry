@@ -10,6 +10,7 @@ use tokio::runtime::Handle;
 use tokio::task::JoinHandle;
 use tokio_metrics::{RuntimeMetrics, RuntimeMonitor};
 
+/// How often the runtime is sampled.
 const INTERVAL: Duration = Duration::from_secs(1);
 
 /// Sample the current Tokio runtime once a second, for as long as it runs:
@@ -42,6 +43,7 @@ pub fn export_runtime_metrics() -> JoinHandle<()> {
     clippy::cast_precision_loss,
     reason = "gauges are f64; counts this large are not exact anyway"
 )]
+/// Record one sample of the runtime's metrics.
 fn record(metrics: &RuntimeMetrics) {
     let elapsed = metrics.elapsed;
     gauge!("tokio_runtime_workers").set(metrics.workers_count as f64);
@@ -63,11 +65,13 @@ fn record(metrics: &RuntimeMetrics) {
     counter!("tokio_runtime_worker_parks_total").increment(metrics.total_park_count);
 }
 
+/// The share of `elapsed` the average worker was busy, from 0 to 1.
 fn mean_worker_busy_ratio(total_busy: Duration, elapsed: Duration, workers: usize) -> f64 {
     let workers = u32::try_from(workers.max(1)).unwrap_or(u32::MAX);
     (duration_ratio(total_busy, elapsed) / f64::from(workers)).clamp(0.0, 1.0)
 }
 
+/// `duration` as a share of `elapsed`; 0 when no time elapsed.
 fn duration_ratio(duration: Duration, elapsed: Duration) -> f64 {
     if elapsed.is_zero() {
         0.0

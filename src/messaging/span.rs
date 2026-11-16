@@ -17,18 +17,31 @@ use super::MessagingOperation;
 #[derive(Debug, Clone)]
 #[must_use = "a messaging span does nothing until started"]
 pub struct MessagingSpan<'a> {
+    /// `messaging.system`.
     pub(super) system: &'a str,
+    /// `messaging.operation.type`, and the span kind.
     pub(super) operation: MessagingOperation,
+    /// `messaging.operation.name`.
     pub(super) operation_name: Option<&'a str>,
+    /// `messaging.destination.name`.
     pub(super) destination: Option<&'a str>,
+    /// `messaging.destination.template`; names the span when set.
     pub(super) destination_template: Option<&'a str>,
+    /// `messaging.message.id`.
     pub(super) message_id: Option<&'a str>,
+    /// `messaging.message.conversation_id`.
     pub(super) conversation_id: Option<&'a str>,
+    /// `messaging.message.body.size`.
     pub(super) body_size: Option<u64>,
+    /// `messaging.batch.message_count`.
     pub(super) batch_message_count: Option<u64>,
+    /// `messaging.consumer.group.name`.
     pub(super) consumer_group: Option<&'a str>,
+    /// `server.address`.
     pub(super) server_address: Option<&'a str>,
+    /// `server.port`.
     pub(super) server_port: Option<u16>,
+    /// The parent context; the current span when unset.
     pub(super) parent: Option<opentelemetry::Context>,
 }
 
