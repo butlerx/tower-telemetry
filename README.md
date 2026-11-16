@@ -214,6 +214,8 @@ let consumer = ServiceBuilder::new()
 
 A span that covers a batch can link to each message's producer with `link_producers`. Pulling (`receive`) and acknowledging (`settle`) get their own spans from `MessagingSpan`.
 
+The [`messaging` docs](https://docs.rs/tower-telemetry/latest/tower_telemetry/messaging/) walk through producing, carrying context in your client's own header type, pull consumers with `receive` and `settle` spans, errors and extra attributes.
+
 ## Forwarding headers
 
 Host, client address and scheme are read from `X-Forwarded-Host`, `X-Client-IP`/`X-Forwarded-For` and `X-Forwarded-Proto` when present. Run behind a proxy that sets or strips them.
