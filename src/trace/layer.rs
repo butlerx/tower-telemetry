@@ -18,6 +18,13 @@ use tracing::field::Empty;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use super::{DefaultSpanDecorator, NoOpFilter, RequestFilter, SpanDecorator};
+use crate::attribute::{
+    CLIENT_ADDRESS, ERROR_TYPE, EXCEPTION_MESSAGE, HTTP_REQUEST_BODY_SIZE,
+    HTTP_REQUEST_HEADER_CONTENT_TYPE, HTTP_REQUEST_METHOD, HTTP_RESPONSE_BODY_SIZE,
+    HTTP_RESPONSE_HEADER_CONTENT_TYPE, HTTP_RESPONSE_STATUS_CODE, HTTP_ROUTE,
+    NETWORK_PROTOCOL_NAME, NETWORK_PROTOCOL_VERSION, OTEL_KIND, OTEL_NAME, OTEL_STATUS_CODE,
+    SERVER_ADDRESS, TIME_TO_FIRST_BYTE, URL_PATH, URL_QUERY, URL_SCHEME, USER_AGENT_ORIGINAL, int,
+};
 use crate::request;
 
 /// Starts an OpenTelemetry server span for each request, continuing the
@@ -78,9 +85,17 @@ use crate::request;
 /// | `http.response.status_code`                      | the response                             |
 /// | `http.response.header.content-type`              | the response's `Content-Type`            |
 /// | `http.response.body.size`                        | the body's exact size, else `Content-Length` |
-/// | `http.server.time_to_first_byte`                 | seconds until the response was ready     |
+/// | `http.server.time_to_first_byte`                 | seconds until the response was ready (not in the spec) |
 /// | `otel.status_code`                               | `ERROR` for `5xx` (default decorator) or a failed service |
 /// | `error.type`, `exception.message`                | when the inner service returns an error  |
+///
+/// Every attribute but `http.server.time_to_first_byte` is from
+/// OpenTelemetry's semantic conventions, which have no time to first byte.
+/// That one follows their style: the `http.server` namespace, and seconds.
+///
+/// The span ends when the response headers are ready, so its duration is the
+/// time to first byte. Streaming the body isn't included: for that,
+/// [`HttpMetricsLayer`](crate::HttpMetricsLayer) records the full duration.
 ///
 /// Forwarding headers are trusted as sent: run behind a proxy that sets or
 /// strips them.
@@ -215,12 +230,14 @@ pin_project_lite::pin_project! {
     /// The future [`OtelTraceService`] returns: the inner service's response
     /// future, polled inside the request's span.
     ///
-    /// When the response is ready, it records the status code, response content
-    /// type and body size, and the time to first byte, then hands the response
-    /// to the decorator's [`on_response`](SpanDecorator::on_response). When the
-    /// inner service fails, it marks the span as an error with the error's
-    /// `Display` text. The span ends once the future and every clone of it (in
-    /// the request's extensions, say) are dropped.
+    /// When the response is ready, it records the status code, the response's
+    /// content type and body size, and the time to first byte, then hands the
+    /// response to the decorator's [`on_response`](SpanDecorator::on_response).
+    /// When the inner service fails, it marks the span as an error with the
+    /// error's `Display` text.
+    /// The span ends once the future and every clone of it (in the request's
+    /// extensions, say) are dropped: normally as the response headers are
+    /// ready, so its duration is the time to first byte.
     pub struct ResponseFuture<Fut, D> {
         // The inner service's response future.
         #[pin]
@@ -250,10 +267,10 @@ where
         let span = &*this.span;
         match result {
             Ok(mut response) => {
-                span.record("http.response.status_code", response.status().as_u16());
+                span.record(HTTP_RESPONSE_STATUS_CODE, int(response.status().as_u16()));
                 let content_type = request::header(response.headers(), &CONTENT_TYPE);
                 if !content_type.is_empty() {
-                    span.record("http.response.header.content-type", content_type);
+                    span.record(HTTP_RESPONSE_HEADER_CONTENT_TYPE, content_type);
                 }
                 if let Some(size) = response
                     .body()
@@ -261,19 +278,16 @@ where
                     .exact()
                     .or_else(|| request::content_length(response.headers()))
                 {
-                    span.record("http.response.body.size", size);
+                    span.record(HTTP_RESPONSE_BODY_SIZE, int(size));
                 }
-                span.record(
-                    "http.server.time_to_first_byte",
-                    this.started.elapsed().as_secs_f64(),
-                );
+                span.record(TIME_TO_FIRST_BYTE, this.started.elapsed().as_secs_f64());
                 D::on_response(span, &span.context(), &mut response);
                 Poll::Ready(Ok(response))
             }
             Err(err) => {
-                span.record("otel.status_code", "ERROR");
-                span.record("error.type", "_OTHER");
-                span.record("exception.message", tracing::field::display(&err));
+                span.record(OTEL_STATUS_CODE, "ERROR");
+                span.record(ERROR_TYPE, "_OTHER");
+                span.record(EXCEPTION_MESSAGE, tracing::field::display(&err));
                 Poll::Ready(Err(err))
             }
         }
@@ -288,27 +302,27 @@ fn make_span<B, D: SpanDecorator>(request: &Request<B>) -> Span {
     let span = tracing::info_span!(
         target: "tower_telemetry",
         "HTTP request",
-        otel.name = &*D::span_name(request),
-        otel.kind = "server",
-        otel.status_code = Empty,
-        http.request.method = request::known_method(request.method()),
-        http.route = request::route(request),
-        url.path = request.uri().path(),
-        url.query = request.uri().query(),
-        url.scheme = request::scheme(request),
-        network.protocol.name = "http",
-        network.protocol.version = request::http_version(request.version()),
-        server.address = request::host(headers),
-        client.address = request::client_ip(headers),
-        user_agent.original = request::header(headers, &USER_AGENT),
-        "http.request.header.content-type" = request::header(headers, &CONTENT_TYPE),
-        http.request.body.size = request::content_length(headers),
-        http.response.status_code = Empty,
-        "http.response.header.content-type" = Empty,
-        http.response.body.size = Empty,
-        http.server.time_to_first_byte = Empty,
-        error.type = Empty,
-        exception.message = Empty,
+        { OTEL_NAME } = &*D::span_name(request),
+        { OTEL_KIND } = "server",
+        { OTEL_STATUS_CODE } = Empty,
+        { HTTP_REQUEST_METHOD } = request::known_method(request.method()),
+        { HTTP_ROUTE } = request::route(request),
+        { URL_PATH } = request.uri().path(),
+        { URL_QUERY } = request.uri().query(),
+        { URL_SCHEME } = request::scheme(request),
+        { NETWORK_PROTOCOL_NAME } = "http",
+        { NETWORK_PROTOCOL_VERSION } = request::http_version(request.version()),
+        { SERVER_ADDRESS } = request::host(headers),
+        { CLIENT_ADDRESS } = request::client_ip(headers),
+        { USER_AGENT_ORIGINAL } = request::header(headers, &USER_AGENT),
+        { HTTP_REQUEST_HEADER_CONTENT_TYPE } = request::header(headers, &CONTENT_TYPE),
+        { HTTP_REQUEST_BODY_SIZE } = request::content_length(headers).map(int),
+        { HTTP_RESPONSE_STATUS_CODE } = Empty,
+        { HTTP_RESPONSE_HEADER_CONTENT_TYPE } = Empty,
+        { HTTP_RESPONSE_BODY_SIZE } = Empty,
+        { TIME_TO_FIRST_BYTE } = Empty,
+        { ERROR_TYPE } = Empty,
+        { EXCEPTION_MESSAGE } = Empty,
     );
 
     // A parent span set by earlier middleware wins over the caller's headers.

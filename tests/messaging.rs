@@ -5,8 +5,12 @@ use std::collections::HashMap;
 use std::convert::Infallible;
 
 use opentelemetry::trace::{SpanKind, TracerProvider as _};
+use opentelemetry::{Key, Value};
 use opentelemetry_sdk::propagation::TraceContextPropagator;
 use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider};
+use opentelemetry_semantic_conventions::attribute::{
+    MESSAGING_DESTINATION_NAME, MESSAGING_OPERATION_TYPE, MESSAGING_SYSTEM,
+};
 use tower::{ServiceBuilder, ServiceExt};
 use tower_telemetry::messaging::{
     Message, MessageTraceLayer, MessagingOperation, MessagingSpan, extract_context, inject_context,
@@ -75,4 +79,20 @@ async fn consumer_continues_the_producers_trace() {
         send.span_context.trace_id()
     );
     assert_eq!(process.parent_span_id, send.span_context.span_id());
+    let attribute = |key: &'static str| {
+        process
+            .attributes
+            .iter()
+            .find(|attribute| attribute.key == Key::from_static_str(key))
+            .map(|attribute| attribute.value.clone())
+    };
+    assert_eq!(attribute(MESSAGING_SYSTEM), Some(Value::from("aws_sqs")));
+    assert_eq!(
+        attribute(MESSAGING_OPERATION_TYPE),
+        Some(Value::from("process"))
+    );
+    assert_eq!(
+        attribute(MESSAGING_DESTINATION_NAME),
+        Some(Value::from("orders"))
+    );
 }

@@ -12,6 +12,7 @@ use tower_service::Service;
 use tracing::Span;
 
 use super::{MessagingOperation, MessagingSpan};
+use crate::attribute::{ERROR_TYPE, EXCEPTION_MESSAGE, OTEL_STATUS_CODE};
 
 /// A consumed message, as [`MessageTraceLayer`] needs to trace it.
 ///
@@ -163,10 +164,10 @@ where
         let _entered = this.span.enter();
         let result = ready!(this.inner.poll(cx));
         if let Err(err) = &result {
-            this.span.record("otel.status_code", "ERROR");
-            this.span.record("error.type", "_OTHER");
+            this.span.record(OTEL_STATUS_CODE, "ERROR");
+            this.span.record(ERROR_TYPE, "_OTHER");
             this.span
-                .record("exception.message", tracing::field::display(err));
+                .record(EXCEPTION_MESSAGE, tracing::field::display(err));
         }
         Poll::Ready(result)
     }

@@ -191,7 +191,8 @@
 //!         .receive_messages("orders")
 //!         .instrument(receive.clone())
 //!         .await?;
-//!     receive.record("messaging.batch.message_count", jobs.len() as u64);
+//!     // Integers as `i64`: `tracing-opentelemetry` exports `u64` as a string.
+//!     receive.record("messaging.batch.message_count", jobs.len() as i64);
 //!     link_producers(&receive, jobs.iter().map(|job| &job.attributes as &dyn Extractor));
 //!     drop(receive);
 //!
