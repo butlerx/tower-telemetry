@@ -14,28 +14,34 @@ use tracing::Span;
 use super::{MessagingOperation, MessagingSpan};
 
 /// A consumed message, as [`MessageTraceLayer`] needs to trace it.
-/// Implement it for your client's message type; only [`system`](Self::system)
-/// is required.
+///
+/// Implement it for your client's message type. Only
+/// [`system`](Self::system) is required, but implement
+/// [`context`](Self::context) too, or every message starts a new trace
+/// instead of continuing its producer's. See the
+/// [module docs](super#consuming-one-message-at-a-time) for a full example.
 pub trait Message {
     /// `messaging.system`, e.g. `aws_sqs` or `kafka`.
     fn system(&self) -> &str;
 
-    /// The queue or topic it came from.
+    /// The queue or topic it came from (`messaging.destination.name`).
+    /// Names the span: `process {destination}`.
     fn destination(&self) -> Option<&str> {
         None
     }
 
-    /// Its id.
+    /// Its broker-assigned id (`messaging.message.id`).
     fn message_id(&self) -> Option<&str> {
         None
     }
 
-    /// Its body size, in bytes.
+    /// Its body size, in bytes (`messaging.message.body.size`).
     fn body_size(&self) -> Option<u64> {
         None
     }
 
-    /// The consumer group or subscription it was read by.
+    /// The consumer group or subscription it was read by
+    /// (`messaging.consumer.group.name`).
     fn consumer_group(&self) -> Option<&str> {
         None
     }
