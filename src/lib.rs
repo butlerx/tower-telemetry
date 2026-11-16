@@ -55,7 +55,7 @@ mod trace;
 pub use metrics::{HttpMetricsLayer, MetricLabels, MetricNames};
 #[cfg(feature = "trace")]
 pub use trace::{
-    DefaultSpanDecorator, HEALTHCHECK_PATHS, HealthcheckFilter, NoOpFilter, OtelTraceLayer,
-    OtelTraceService, PropagatingSpanDecorator, RequestFilter, ResponseFuture, SpanDecorator,
-    mark_server_errors,
+    DefaultSpanDecorator, HEALTHCHECK_PATHS, HEALTHCHECK_USER_AGENTS, HealthcheckFilter,
+    NoOpFilter, OtelTraceLayer, OtelTraceService, PropagatingSpanDecorator, RequestFilter,
+    ResponseFuture, SpanDecorator, mark_server_errors,
 };

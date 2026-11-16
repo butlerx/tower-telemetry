@@ -67,7 +67,7 @@ impl RequestFilter for SkipProbes {
 let layer = OtelTraceLayer::<DefaultSpanDecorator, SkipProbes>::default();
 ```
 
-`HealthcheckFilter` skips `/health`, `/ready`, `/healthz` and `/healthcheck` (exact paths, with or without a trailing slash), plus AWS load balancer and ECS health checks by user agent.
+`HealthcheckFilter` skips `/health`, `/ready`, `/healthz` and `/healthcheck` (exact paths, with or without a trailing slash), plus well-known health checkers by user agent on any path: AWS ELB, ECS and Route 53, Kubernetes probes, Google Cloud and Azure load balancers, Azure Front Door, Envoy and Consul (`HEALTHCHECK_USER_AGENTS` has the list). Uptime monitors are still traced.
 
 The filter runs on every request, so match on the method, path and headers only.
 

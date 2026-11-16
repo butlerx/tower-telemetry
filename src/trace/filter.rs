@@ -55,20 +55,55 @@ impl RequestFilter for NoOpFilter {}
 /// slash is ignored).
 pub const HEALTHCHECK_PATHS: [&str; 4] = ["/health", "/ready", "/healthz", "/healthcheck"];
 
+/// The user-agent prefixes of well-known health checkers, which
+/// [`HealthcheckFilter`] leaves out whatever path they probe:
+///
+/// | Prefix                                  | Sent by                          |
+/// | --------------------------------------- | -------------------------------- |
+/// | `ELB-HealthChecker/`                    | AWS Elastic Load Balancing       |
+/// | `ECS-HealthChecker`                     | AWS ECS container health checks  |
+/// | `Amazon-Route53-Health-Check-Service`   | AWS Route 53 health checks       |
+/// | `Amazon Route 53 Health Check Service`  | the same, as some servers log it |
+/// | `kube-probe/`                           | Kubernetes liveness/readiness probes |
+/// | `GoogleHC`                              | Google Cloud load balancing      |
+/// | `Load Balancer Agent`                   | Azure Load Balancer              |
+/// | `Edge Health Probe`                     | Azure Front Door                 |
+/// | `Envoy/HC`                              | Envoy active health checks       |
+/// | `Consul Health Check`                   | Consul                           |
+///
+/// Uptime monitors (Pingdom, `UptimeRobot`, synthetic tests) are left in:
+/// they measure what users see. Skip them with your own [`RequestFilter`].
+pub const HEALTHCHECK_USER_AGENTS: [&str; 10] = [
+    "ELB-HealthChecker/",
+    "ECS-HealthChecker",
+    "Amazon-Route53-Health-Check-Service",
+    "Amazon Route 53 Health Check Service",
+    "kube-probe/",
+    "GoogleHC",
+    "Load Balancer Agent",
+    "Edge Health Probe",
+    "Envoy/HC",
+    "Consul Health Check",
+];
+
 /// Leaves out health checks so they don't drown real traffic: requests to
-/// any of [`HEALTHCHECK_PATHS`], and AWS load balancer and ECS health checks
-/// by user agent, whatever path they probe.
+/// any of [`HEALTHCHECK_PATHS`], and requests from any of
+/// [`HEALTHCHECK_USER_AGENTS`] whatever path they probe.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct HealthcheckFilter;
 
 impl RequestFilter for HealthcheckFilter {
     fn should_ignore<B>(request: &Request<B>) -> bool {
-        is_healthcheck_path(request.uri().path()) || {
-            let user_agent = request::header(request.headers(), &USER_AGENT);
-            user_agent.starts_with("ELB-HealthChecker/")
-                || user_agent.starts_with("ECS-HealthChecker")
-        }
+        is_healthcheck_path(request.uri().path())
+            || is_healthcheck_user_agent(request::header(request.headers(), &USER_AGENT))
     }
+}
+
+/// Whether `user_agent` starts with one of [`HEALTHCHECK_USER_AGENTS`].
+fn is_healthcheck_user_agent(user_agent: &str) -> bool {
+    HEALTHCHECK_USER_AGENTS
+        .iter()
+        .any(|prefix| user_agent.starts_with(prefix))
 }
 
 /// Whether `path` is one of [`HEALTHCHECK_PATHS`], with or without a
@@ -107,6 +142,36 @@ mod tests {
             "curl/8.0"
         )));
         assert!(!HealthcheckFilter::should_ignore(&Request::new(())));
+    }
+
+    #[test]
+    fn healthcheck_filter_ignores_well_known_health_checkers() {
+        for user_agent in [
+            "ELB-HealthChecker/2.0",
+            "ECS-HealthChecker",
+            "Amazon-Route53-Health-Check-Service (ref 0a1b2c3d-4e5f; report http://amzn.to/1vsZADi)",
+            "kube-probe/1.31",
+            "GoogleHC/1.0",
+            "Load Balancer Agent",
+            "Edge Health Probe",
+            "Envoy/HC",
+            "Consul Health Check",
+        ] {
+            assert!(
+                HealthcheckFilter::should_ignore(&request_with_user_agent(user_agent)),
+                "{user_agent}"
+            );
+        }
+        for user_agent in [
+            "Mozilla/5.0 (compatible; UptimeRobot/2.0)",
+            "curl/8.0",
+            "kube-proxy",
+        ] {
+            assert!(
+                !HealthcheckFilter::should_ignore(&request_with_user_agent(user_agent)),
+                "{user_agent}"
+            );
+        }
     }
 
     #[test]
