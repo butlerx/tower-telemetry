@@ -25,7 +25,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .init();
 
     // Metrics: any `metrics` exporter works; this one is scraped.
-    let mut prometheus = PrometheusBuilder::new();
+    let mut prometheus = PrometheusBuilder::new().with_recommended_naming(true);
     let names = MetricNames::DEFAULT;
     for name in names.durations() {
         prometheus = prometheus.set_buckets_for_metric(

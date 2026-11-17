@@ -5,6 +5,11 @@
 //! process, and use [`DURATION_BUCKETS`] and [`BODY_SIZE_BUCKETS`] for the
 //! histograms when it takes buckets.
 
+use opentelemetry_semantic_conventions::metric::{
+    HTTP_SERVER_ACTIVE_REQUESTS, HTTP_SERVER_REQUEST_BODY_SIZE, HTTP_SERVER_REQUEST_DURATION,
+    HTTP_SERVER_RESPONSE_BODY_SIZE,
+};
+
 mod layer;
 mod process;
 #[cfg(feature = "runtime-metrics")]
@@ -17,9 +22,14 @@ pub use runtime::export_runtime_metrics;
 
 /// The names [`HttpMetricsLayer`] records under, one per metric.
 ///
-/// The defaults ([`MetricNames::DEFAULT`]) follow Prometheus naming: a
-/// `http_server_` prefix, and the unit as a suffix. Set your own to keep
-/// existing dashboards and alerts working, changing only the names you need:
+/// The defaults ([`MetricNames::DEFAULT`]) are OpenTelemetry's HTTP server
+/// metric names, and the two the conventions don't define follow their
+/// style. Exporters adapt them: Prometheus with recommended naming turns
+/// `http.server.request.duration` into `http_server_request_duration_seconds`,
+/// and `DogStatsD` sends it as is.
+///
+/// Set your own to keep existing dashboards and alerts working, changing only
+/// the names you need:
 ///
 /// ```
 /// use tower_telemetry::MetricNames;
@@ -35,26 +45,36 @@ pub use runtime::export_runtime_metrics;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MetricNames {
     /// Counter of requests answered, incremented once the response headers are
-    /// ready. Default: `http_server_requests_total`.
+    /// ready. Default: `http.server.requests` (Prometheus:
+    /// `http_server_requests_total`). Not in the conventions, which count
+    /// requests from the duration histogram; kept as a plain counter for
+    /// dashboards and alerts that want one.
     pub requests: &'static str,
     /// Histogram of seconds from the request arriving to the response body
     /// finishing, or the client going away. Covers streamed bodies end to end.
-    /// Default: `http_server_request_duration_seconds`.
+    /// Default: `http.server.request.duration` (Prometheus:
+    /// `http_server_request_duration_seconds`).
     pub duration: &'static str,
     /// Histogram of seconds from the request arriving to the response headers
     /// being ready: how long the handler took before it started answering.
-    /// Default: `http_server_time_to_first_byte_seconds`.
+    /// Default: `http.server.time_to_first_byte` (Prometheus:
+    /// `http_server_time_to_first_byte_seconds`). Not in the conventions; named
+    /// in their style.
     pub time_to_first_byte: &'static str,
     /// Histogram of request body sizes in bytes, as declared by `Content-Length`.
     /// Not recorded for requests without one (chunked uploads) or with a size of
-    /// 0. Default: `http_server_request_body_size_bytes`.
+    /// 0. Default: `http.server.request.body.size` (Prometheus:
+    /// `http_server_request_body_size_bytes`).
     pub request_body_size: &'static str,
     /// Histogram of response body bytes actually sent, counted as the body
     /// streams; short when the client goes away mid-body. Default:
-    /// `http_server_response_body_size_bytes`.
+    /// `http.server.response.body.size` (Prometheus:
+    /// `http_server_response_body_size_bytes`).
     pub response_body_size: &'static str,
     /// Gauge of requests in progress, from arrival until the response body
-    /// finishes or is dropped. Unlabelled. Default: `http_server_active_requests`.
+    /// finishes or is dropped, labelled by method and scheme (and host when
+    /// enabled). Default: `http.server.active_requests` (Prometheus:
+    /// `http_server_active_requests`).
     pub active_requests: &'static str,
 }
 
@@ -62,21 +82,21 @@ impl MetricNames {
     /// The default names, as a constant for struct update syntax
     /// (`MetricNames { requests: "...", ..MetricNames::DEFAULT }`):
     ///
-    /// | Field                | Name                                     |
-    /// | -------------------- | ---------------------------------------- |
-    /// | `requests`           | `http_server_requests_total`             |
-    /// | `duration`           | `http_server_request_duration_seconds`   |
-    /// | `time_to_first_byte` | `http_server_time_to_first_byte_seconds` |
-    /// | `request_body_size`  | `http_server_request_body_size_bytes`    |
-    /// | `response_body_size` | `http_server_response_body_size_bytes`   |
-    /// | `active_requests`    | `http_server_active_requests`            |
+    /// | Field                | Name                             | Unit    | In the conventions |
+    /// | -------------------- | -------------------------------- | ------- | ------------------ |
+    /// | `requests`           | `http.server.requests`           | count   | no                 |
+    /// | `duration`           | `http.server.request.duration`   | seconds | yes                |
+    /// | `time_to_first_byte` | `http.server.time_to_first_byte` | seconds | no                 |
+    /// | `request_body_size`  | `http.server.request.body.size`  | bytes   | yes                |
+    /// | `response_body_size` | `http.server.response.body.size` | bytes   | yes                |
+    /// | `active_requests`    | `http.server.active_requests`    | count   | yes                |
     pub const DEFAULT: Self = Self {
-        requests: "http_server_requests_total",
-        duration: "http_server_request_duration_seconds",
-        time_to_first_byte: "http_server_time_to_first_byte_seconds",
-        request_body_size: "http_server_request_body_size_bytes",
-        response_body_size: "http_server_response_body_size_bytes",
-        active_requests: "http_server_active_requests",
+        requests: "http.server.requests",
+        duration: HTTP_SERVER_REQUEST_DURATION,
+        time_to_first_byte: "http.server.time_to_first_byte",
+        request_body_size: HTTP_SERVER_REQUEST_BODY_SIZE,
+        response_body_size: HTTP_SERVER_RESPONSE_BODY_SIZE,
+        active_requests: HTTP_SERVER_ACTIVE_REQUESTS,
     };
 
     /// The two duration histograms, `duration` and `time_to_first_byte`: the

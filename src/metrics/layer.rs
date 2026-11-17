@@ -8,14 +8,21 @@ use std::time::Instant;
 
 use std::borrow::Cow;
 
-use ::metrics::{Label, SharedString, counter, gauge, histogram};
+use ::metrics::{
+    Gauge, Label, SharedString, Unit, counter, describe_counter, describe_gauge,
+    describe_histogram, gauge, histogram,
+};
 use bytes::Buf;
-use http::{Request, Response};
+use http::{Request, Response, StatusCode};
 use http_body::{Body, Frame, SizeHint};
 use tower_layer::Layer;
 use tower_service::Service;
 
 use super::MetricNames;
+use crate::attribute::{
+    ERROR_TYPE, HTTP_REQUEST_METHOD, HTTP_RESPONSE_STATUS_CODE, HTTP_ROUTE,
+    NETWORK_PROTOCOL_VERSION, SERVER_ADDRESS, URL_SCHEME,
+};
 use crate::request;
 
 /// Extra labels for a request's metrics, set by a handler as a response
@@ -23,8 +30,8 @@ use crate::request;
 ///
 /// Use it for what only the handler knows, such as the customer plan a
 /// request was for. [`HttpMetricsLayer`] adds the labels to every metric it
-/// records for the request, after `method`, `route` and `status_code`, then
-/// removes the extension from the response.
+/// records for the request, after its own, then removes the extension from
+/// the response.
 ///
 /// ```
 /// use tower_telemetry::MetricLabels;
@@ -62,16 +69,18 @@ pub struct MetricLabels(
 ///
 /// # Metrics
 ///
-/// Default names ([`MetricNames::DEFAULT`]):
+/// Default names ([`MetricNames::DEFAULT`]) are OpenTelemetry's HTTP server
+/// metrics, plus a request counter and time to first byte, which the
+/// conventions don't define and which follow their style:
 ///
-/// | Name                                     | Type      | Unit    | Recorded                                  |
-/// | ---------------------------------------- | --------- | ------- | ----------------------------------------- |
-/// | `http_server_requests_total`             | counter   | requests | when the response headers are ready      |
-/// | `http_server_time_to_first_byte_seconds` | histogram | seconds | when the response headers are ready       |
-/// | `http_server_request_body_size_bytes`    | histogram | bytes   | when the headers are ready, from `Content-Length`, if over 0 |
-/// | `http_server_request_duration_seconds`   | histogram | seconds | when the response body finishes or is dropped |
-/// | `http_server_response_body_size_bytes`   | histogram | bytes   | when the response body finishes or is dropped, counting the bytes sent |
-/// | `http_server_active_requests`            | gauge     | requests | up when a request arrives, down when its body finishes |
+/// | Name                             | Type      | Unit    | Recorded                                   |
+/// | -------------------------------- | --------- | ------- | ------------------------------------------ |
+/// | `http.server.requests`           | counter   | count   | when the response headers are ready        |
+/// | `http.server.time_to_first_byte` | histogram | seconds | when the response headers are ready        |
+/// | `http.server.request.body.size`  | histogram | bytes   | when the headers are ready, from `Content-Length`, if over 0 |
+/// | `http.server.request.duration`   | histogram | seconds | when the response body finishes or is dropped |
+/// | `http.server.response.body.size` | histogram | bytes   | when the response body finishes or is dropped, counting the bytes sent |
+/// | `http.server.active_requests`    | gauge     | count   | up when a request arrives, down when its body finishes |
 ///
 /// Duration and response size cover the whole response, streamed bodies
 /// included, because the layer wraps the body in [`MetricsBody`]. If the
@@ -79,21 +88,41 @@ pub struct MetricLabels(
 /// far. If the request is dropped before any response, nothing is recorded,
 /// but `active_requests` still comes back down.
 ///
+/// # How exporters name them
+///
+/// The layer describes each metric's unit to the recorder when it's
+/// applied, so install your exporter before building the router or service.
+///
+/// | Exporter                                       | `http.server.request.duration` becomes  | Label keys            |
+/// | ---------------------------------------------- | --------------------------------------- | --------------------- |
+/// | Prometheus, `with_recommended_naming(true)`    | `http_server_request_duration_seconds`  | `http_request_method` |
+/// | Prometheus, default                            | `http_server_request_duration`          | `http_request_method` |
+/// | `DogStatsD`                                    | `http.server.request.duration`          | `http.request.method` |
+///
+/// For Prometheus, turn on recommended naming: it adds the unit (`_seconds`,
+/// `_bytes`) from the description, and `_total` to the counter, giving
+/// `http_server_requests_total`. Prometheus replaces the dots with
+/// underscores either way.
+///
 /// # Labels
 ///
-/// Every metric but `active_requests`, which has none, is labelled:
+/// Every metric is labelled with OpenTelemetry's HTTP attributes, as the
+/// conventions give them for each:
 ///
-/// | Label         | Value                                                         |
-/// | ------------- | ------------------------------------------------------------- |
-/// | `method`      | the method; `_OTHER` for non-standard ones                    |
-/// | `route`       | axum's matched route (feature `axum`), else empty             |
-/// | `status_code` | the response status, or `error` when the inner service failed |
-/// | `host`        | only with [`with_host_label(true)`](Self::with_host_label)    |
-/// | yours         | any [`MetricLabels`] the response carries                     |
+/// | Label                       | Value                                                     | On                 |
+/// | --------------------------- | --------------------------------------------------------- | ------------------ |
+/// | `http.request.method`       | the method; `_OTHER` for non-standard ones                | all                |
+/// | `url.scheme`                | `X-Forwarded-Proto`, else the URI, else `http`            | all                |
+/// | `network.protocol.version`  | `1.1`, `2`, ...                                           | all but active     |
+/// | `http.route`                | axum's matched route (feature `axum`); left off when none | all but active     |
+/// | `http.response.status_code` | the response status; left off when the service failed     | all but active     |
+/// | `error.type`                | the status code for a `5xx`, `_OTHER` when the service failed; left off otherwise | all but active |
+/// | `server.address`            | only with [`with_host_label(true)`](Self::with_host_label) | all               |
+/// | yours                       | any [`MetricLabels`] the response carries                 | all but active     |
 ///
 /// The route, never the path, keeps the number of series bounded. Without
-/// axum, or behind a layer added from outside the router, `route` is empty
-/// for every request: see the [crate docs](crate#axum) for where to add it.
+/// axum, or behind a layer added from outside the router, there's no route:
+/// see the [crate docs](crate#axum) for where to add the layer.
 ///
 /// # Adding labels from a handler
 ///
@@ -147,7 +176,7 @@ pub struct MetricLabels(
 ///     .into_iter()
 ///     .map(|name| (name, &DURATION_BUCKETS[..]))
 ///     .chain(names.body_sizes().into_iter().map(|name| (name, &BODY_SIZE_BUCKETS[..])))
-///     .try_fold(PrometheusBuilder::new(), |builder, (name, buckets)| {
+///     .try_fold(PrometheusBuilder::new().with_recommended_naming(true), |builder, (name, buckets)| {
 ///         builder.set_buckets_for_metric(Matcher::Full(name.to_owned()), buckets)
 ///     })?;
 /// // builder.install_recorder()?;
@@ -180,9 +209,10 @@ impl HttpMetricsLayer {
         Self { names, ..self }
     }
 
-    /// Label metrics with `host`: `X-Forwarded-Host`, else `Host`. Off by
-    /// default, since the client picks it: turn it on only behind a proxy
-    /// that restricts it to your own domains.
+    /// Label metrics with `server.address`: `X-Forwarded-Host`, else `Host`.
+    /// The conventions make it opt-in, and so does this: the client picks
+    /// it, so turn it on only behind a proxy that restricts it to your own
+    /// domains, or every made-up host is a new time series.
     #[must_use]
     pub const fn with_host_label(self, host_label: bool) -> Self {
         Self { host_label, ..self }
@@ -193,6 +223,7 @@ impl<S> Layer<S> for HttpMetricsLayer {
     type Service = HttpMetricsService<S>;
 
     fn layer(&self, inner: S) -> Self::Service {
+        describe(&self.names);
         HttpMetricsService {
             inner,
             layer: *self,
@@ -230,22 +261,35 @@ where
 
     fn call(&mut self, request: Request<ReqBody>) -> Self::Future {
         let HttpMetricsLayer { names, host_label } = self.layer;
+        let method = Label::new(HTTP_REQUEST_METHOD, request::known_method(request.method()));
+        let scheme = Label::new(URL_SCHEME, scheme_label(request::scheme(&request)));
+        let host = host_label
+            .then(|| Label::new(SERVER_ADDRESS, request::host(request.headers()).to_owned()));
+        let active = Active::new(
+            names.active_requests,
+            [method.clone(), scheme.clone()]
+                .into_iter()
+                .chain(host.clone())
+                .collect::<Vec<_>>(),
+        );
         let labels = [
-            Label::new("method", request::known_method(request.method())),
+            method,
+            scheme,
             Label::new(
-                "route",
-                request::route(&request).unwrap_or_default().to_owned(),
+                NETWORK_PROTOCOL_VERSION,
+                request::http_version(request.version()),
             ),
         ]
         .into_iter()
-        .chain(host_label.then(|| Label::new("host", request::host(request.headers()).to_owned())))
+        .chain(request::route(&request).map(|route| Label::new(HTTP_ROUTE, route.to_owned())))
+        .chain(host)
         .collect();
         let pending = Pending {
             names,
             labels,
             started: Instant::now(),
             request_body_size: request::content_length(request.headers()),
-            active: Active::new(names.active_requests),
+            active,
         };
         MetricsFuture {
             pending: Some(pending),
@@ -254,21 +298,96 @@ where
     }
 }
 
+/// Describe each metric's unit to the installed recorder, once per layer
+/// applied. Exporters use it: Prometheus, with recommended naming, turns it
+/// into the `_seconds`, `_bytes` and `_total` suffixes.
+fn describe(names: &MetricNames) {
+    describe_counter!(
+        names.requests,
+        Unit::Count,
+        "HTTP server requests answered."
+    );
+    describe_histogram!(
+        names.duration,
+        Unit::Seconds,
+        "Duration of HTTP server requests, to the end of the response body."
+    );
+    describe_histogram!(
+        names.time_to_first_byte,
+        Unit::Seconds,
+        "Time from an HTTP request arriving to its response headers being ready."
+    );
+    describe_histogram!(
+        names.request_body_size,
+        Unit::Bytes,
+        "Size of HTTP server request bodies, as declared by Content-Length."
+    );
+    describe_histogram!(
+        names.response_body_size,
+        Unit::Bytes,
+        "Size of HTTP server response bodies, as sent."
+    );
+    describe_gauge!(
+        names.active_requests,
+        Unit::Count,
+        "HTTP server requests in progress."
+    );
+}
+
+/// `url.scheme` without allocating for the usual two.
+fn scheme_label(scheme: &str) -> SharedString {
+    match scheme {
+        "https" => SharedString::const_str("https"),
+        "http" => SharedString::const_str("http"),
+        other => SharedString::from(other.to_owned()),
+    }
+}
+
+/// How a request ended, as its labels record it.
+enum Outcome {
+    /// The service answered with this status.
+    Answered(StatusCode),
+    /// The service failed without answering.
+    Failed,
+}
+
+impl Outcome {
+    /// `http.response.status_code` when there's a response, and `error.type`
+    /// when the request failed: the status code for a `5xx`, `_OTHER` when
+    /// there's no response, as the conventions ask.
+    fn labels(&self) -> impl Iterator<Item = Label> {
+        let (status, error) = match self {
+            Self::Answered(status) => (
+                Some(status.as_str().to_owned()),
+                status
+                    .is_server_error()
+                    .then(|| status.as_str().to_owned().into()),
+            ),
+            Self::Failed => (None, Some(SharedString::const_str("_OTHER"))),
+        };
+        status
+            .map(|status| Label::new(HTTP_RESPONSE_STATUS_CODE, status))
+            .into_iter()
+            .chain(error.map(|error| Label::new(ERROR_TYPE, error)))
+    }
+}
+
 /// Counts a request as active until dropped: also when the client goes away
 /// and the future or body is dropped unfinished.
-struct Active(&'static str);
+struct Active(Gauge);
 
 impl Active {
-    /// Count one more request in the gauge `name`.
-    fn new(name: &'static str) -> Self {
-        gauge!(name).increment(1);
-        Self(name)
+    /// Count one more request in the gauge `name`, with `labels`.
+    fn new(name: &'static str, labels: Vec<Label>) -> Self {
+        let gauge = gauge!(name, labels);
+        gauge.increment(1);
+        Self(gauge)
     }
 }
 
 impl Drop for Active {
     fn drop(&mut self) {
-        gauge!(self.0).decrement(1);
+        self.0.decrement(1);
     }
 }
 
@@ -278,7 +397,8 @@ impl Drop for Active {
 struct Pending {
     /// The names to record under.
     names: MetricNames,
-    /// The request's labels so far: `method`, `route` and maybe `host`.
+    /// The request's labels so far: method, scheme, protocol version, and
+    /// route and host when known.
     labels: Vec<Label>,
     /// When the request arrived.
     started: Instant,
@@ -295,11 +415,7 @@ impl Pending {
         clippy::cast_precision_loss,
         reason = "histogram samples, not exact values"
     )]
-    fn headers_ready(
-        self,
-        status: impl Into<SharedString>,
-        extra: Option<MetricLabels>,
-    ) -> Recorder {
+    fn headers_ready(self, outcome: &Outcome, extra: Option<MetricLabels>) -> Recorder {
         let Self {
             names,
             labels,
@@ -309,7 +425,7 @@ impl Pending {
         } = self;
         let labels: Vec<Label> = labels
             .into_iter()
-            .chain(std::iter::once(Label::new("status_code", status)))
+            .chain(outcome.labels())
             .chain(
                 extra
                     .into_iter()
@@ -338,7 +454,7 @@ impl Pending {
 struct Recorder {
     /// The names to record under.
     names: MetricNames,
-    /// The request's labels, complete with `status_code` and any
+    /// The request's labels, complete with its outcome and any
     /// [`MetricLabels`].
     labels: Vec<Label>,
     /// When the request arrived.
@@ -395,13 +511,13 @@ where
         Poll::Ready(match result {
             Ok(mut response) => {
                 let extra = response.extensions_mut().remove::<MetricLabels>();
-                let status = response.status().as_str().to_owned();
-                let recorder = pending.map(|pending| pending.headers_ready(status, extra));
+                let outcome = Outcome::Answered(response.status());
+                let recorder = pending.map(|pending| pending.headers_ready(&outcome, extra));
                 Ok(response.map(|inner| MetricsBody { inner, recorder }))
             }
             Err(err) => {
                 // Recorded, with no body, as the recorder drops here.
-                drop(pending.map(|pending| pending.headers_ready("error", None)));
+                drop(pending.map(|pending| pending.headers_ready(&Outcome::Failed, None)));
                 Err(err)
             }
         })
@@ -508,12 +624,22 @@ mod tests {
         assert_eq!(
             labels,
             [
-                ("method", "POST"),
-                ("route", ""),
-                ("status_code", "200"),
+                ("http.request.method", "POST"),
+                ("url.scheme", "http"),
+                ("network.protocol.version", "1.1"),
+                ("http.response.status_code", "200"),
                 ("tenant", "acme"),
             ]
         );
+
+        let (_, unit, _, _) = find(MetricNames::DEFAULT.duration);
+        assert_eq!(
+            unit,
+            &Some(Unit::Seconds),
+            "units are described for exporters"
+        );
+        let (_, unit, _, _) = find(MetricNames::DEFAULT.response_body_size);
+        assert_eq!(unit, &Some(Unit::Bytes));
 
         let (_, _, _, value) = find(MetricNames::DEFAULT.response_body_size);
         let DebugValue::Histogram(sizes) = value else {
@@ -522,8 +648,71 @@ mod tests {
         assert_eq!(sizes.len(), 1);
         assert!((sizes[0].into_inner() - 5.0).abs() < f64::EPSILON);
 
-        let (_, _, _, value) = find(MetricNames::DEFAULT.active_requests);
+        let (key, _, _, value) = find(MetricNames::DEFAULT.active_requests);
         assert_eq!(value, &DebugValue::Gauge(0.0.into()));
+        let labels: Vec<_> = key.key().labels().map(Label::key).collect();
+        assert_eq!(labels, ["http.request.method", "url.scheme"]);
+    }
+
+    /// The outcome labels of `requests` for one request answered by
+    /// `service`.
+    async fn outcome_labels<S>(service: S) -> Vec<(String, String)>
+    where
+        S: Service<Request<()>, Response = Response<Full<Bytes>>, Error = std::io::Error>,
+    {
+        let recorder = DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+        let _guard = ::metrics::set_default_local_recorder(&recorder);
+        let _ = ServiceBuilder::new()
+            .layer(HttpMetricsLayer::default())
+            .service(service)
+            .oneshot(Request::new(()))
+            .await;
+        snapshotter
+            .snapshot()
+            .into_vec()
+            .into_iter()
+            .find(|(key, ..)| key.key().name() == MetricNames::DEFAULT.requests)
+            .expect("requests is recorded")
+            .0
+            .key()
+            .labels()
+            .filter(|label| matches!(label.key(), "http.response.status_code" | "error.type"))
+            .map(|label| (label.key().to_owned(), label.value().to_owned()))
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn server_errors_and_failures_set_error_type() {
+        let answered = |status: u16| {
+            service_fn(move |_request: Request<()>| async move {
+                let mut response = Response::new(Full::new(Bytes::new()));
+                *response.status_mut() = StatusCode::from_u16(status).expect("valid status");
+                Ok::<_, std::io::Error>(response)
+            })
+        };
+        let pair = |key: &str, value: &str| (key.to_owned(), value.to_owned());
+
+        assert_eq!(
+            outcome_labels(answered(404)).await,
+            [pair("http.response.status_code", "404")],
+            "a 4xx is the client's error, not the server's"
+        );
+        assert_eq!(
+            outcome_labels(answered(503)).await,
+            [
+                pair("http.response.status_code", "503"),
+                pair("error.type", "503"),
+            ]
+        );
+        let failing = service_fn(|_request: Request<()>| async {
+            Err::<Response<Full<Bytes>>, _>(std::io::Error::other("upstream gone"))
+        });
+        assert_eq!(
+            outcome_labels(failing).await,
+            [pair("error.type", "_OTHER")],
+            "no status without a response"
+        );
     }
 
     #[tokio::test]
