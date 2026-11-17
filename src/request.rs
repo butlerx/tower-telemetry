@@ -12,7 +12,7 @@ pub(crate) const X_FORWARDED_HOST: HeaderName = HeaderName::from_static("x-forwa
 #[cfg(feature = "trace")]
 /// `X-Forwarded-For`.
 pub(crate) const X_FORWARDED_FOR: HeaderName = HeaderName::from_static("x-forwarded-for");
-#[cfg(feature = "trace")]
+#[cfg(any(feature = "trace", feature = "metrics"))]
 /// `X-Forwarded-Proto`.
 pub(crate) const X_FORWARDED_PROTO: HeaderName = HeaderName::from_static("x-forwarded-proto");
 #[cfg(feature = "trace")]
@@ -64,7 +64,7 @@ pub(crate) fn client_ip(headers: &HeaderMap) -> &str {
 }
 
 /// `X-Forwarded-Proto`, else the request's own scheme, else `http`.
-#[cfg(feature = "trace")]
+#[cfg(any(feature = "trace", feature = "metrics"))]
 pub(crate) fn scheme<B>(request: &Request<B>) -> &str {
     match header(request.headers(), &X_FORWARDED_PROTO) {
         "" => request.uri().scheme_str().unwrap_or("http"),
@@ -95,7 +95,7 @@ pub(crate) fn content_length(headers: &HeaderMap) -> Option<u64> {
 }
 
 /// The protocol version as OpenTelemetry names it (`network.protocol.version`).
-#[cfg(feature = "trace")]
+#[cfg(any(feature = "trace", feature = "metrics"))]
 pub(crate) fn http_version(version: http::Version) -> &'static str {
     match version {
         http::Version::HTTP_09 => "0.9",
@@ -149,7 +149,7 @@ mod tests {
         assert_eq!(client_ip(&HeaderMap::new()), "");
     }
 
-    #[cfg(feature = "trace")]
+    #[cfg(any(feature = "trace", feature = "metrics"))]
     #[test]
     fn scheme_prefers_forwarded_proto() {
         let mut request = Request::new(());
@@ -178,7 +178,7 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "trace")]
+    #[cfg(any(feature = "trace", feature = "metrics"))]
     #[test]
     fn known_http_versions_are_named() {
         assert_eq!(http_version(http::Version::HTTP_11), "1.1");

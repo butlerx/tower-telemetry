@@ -129,16 +129,20 @@ Messaging spans work the same way: call `set_attribute` on the `Span` that `Mess
 
 ## HTTP metrics
 
-| Default name                             | Type      | Recorded when            |
-| ---------------------------------------- | --------- | ------------------------ |
-| `http_server_requests_total`             | counter   | response headers ready   |
-| `http_server_time_to_first_byte_seconds` | histogram | response headers ready   |
-| `http_server_request_duration_seconds`   | histogram | response body finished   |
-| `http_server_request_body_size_bytes`    | histogram | from `Content-Length`    |
-| `http_server_response_body_size_bytes`   | histogram | bytes actually sent      |
-| `http_server_active_requests`            | gauge     | until body finished      |
+Metrics use OpenTelemetry's HTTP server names, plus a request counter and time to first byte, which the conventions don't define:
 
-Labels: `method`, `route`, `status_code` and, opt-in with `with_host_label(true)`, `host`. Add your own from a handler with `MetricLabels` in the response extensions. Keep their values few, since every distinct set is a new time series:
+| Default name                     | Type      | Unit    | Prometheus (recommended naming)          | Recorded when          |
+| -------------------------------- | --------- | ------- | ---------------------------------------- | ---------------------- |
+| `http.server.requests`           | counter   | count   | `http_server_requests_total`             | response headers ready |
+| `http.server.time_to_first_byte` | histogram | seconds | `http_server_time_to_first_byte_seconds` | response headers ready |
+| `http.server.request.duration`   | histogram | seconds | `http_server_request_duration_seconds`   | response body finished |
+| `http.server.request.body.size`  | histogram | bytes   | `http_server_request_body_size_bytes`    | from `Content-Length`  |
+| `http.server.response.body.size` | histogram | bytes   | `http_server_response_body_size_bytes`   | bytes actually sent    |
+| `http.server.active_requests`    | gauge     | count   | `http_server_active_requests`            | until body finished    |
+
+The layer describes each metric's unit, so install your exporter before building the app. With Prometheus, use `PrometheusBuilder::new().with_recommended_naming(true)` to get the names above; without it the unit and `_total` suffixes are left off. DogStatsD sends the dotted names as they are.
+
+Labels are OpenTelemetry's: `http.request.method`, `url.scheme`, `network.protocol.version`, `http.route` (when a route matched), `http.response.status_code`, and `error.type` on `5xx` and failures. `server.address` is opt-in with `with_host_label(true)`. In Prometheus the dots become underscores (`http_request_method`). Add your own from a handler with `MetricLabels` in the response extensions. Keep their values few, since every distinct set is a new time series:
 
 ```rust
 response

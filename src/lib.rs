@@ -54,7 +54,11 @@
 //!     tracing_subscriber::registry()
 //!         .with(tracing_opentelemetry::layer().with_tracer(provider.tracer("my-service")))
 //!         .init();
-//!     let prometheus = PrometheusBuilder::new().install_recorder()?;
+//!     // Recommended naming adds the unit and `_total` suffixes to the dotted
+//!     // OpenTelemetry names: `http_server_request_duration_seconds`.
+//!     let prometheus = PrometheusBuilder::new()
+//!         .with_recommended_naming(true)
+//!         .install_recorder()?;
 //!
 //!     let app = Router::new()
 //!         .route("/users/{id}", get(user))
@@ -153,7 +157,7 @@
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
-#[cfg(any(feature = "trace", feature = "messaging"))]
+#[cfg(any(feature = "trace", feature = "messaging", feature = "metrics"))]
 mod attribute;
 #[cfg(feature = "messaging")]
 pub mod messaging;

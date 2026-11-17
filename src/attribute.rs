@@ -1,4 +1,4 @@
-//! The attribute names the spans use.
+//! The attribute names the spans and metric labels use.
 //!
 //! OpenTelemetry's come from `opentelemetry-semantic-conventions`, so a typo
 //! fails to compile and a renamed attribute shows up when the crate is
@@ -6,14 +6,18 @@
 //! attributes (the conventions give a prefix plus the header's name), and
 //! [`TIME_TO_FIRST_BYTE`], the one attribute this crate adds.
 
+#[cfg(any(feature = "trace", feature = "messaging"))]
+pub(crate) use opentelemetry_semantic_conventions::attribute::EXCEPTION_MESSAGE;
 #[cfg(feature = "trace")]
 pub(crate) use opentelemetry_semantic_conventions::attribute::{
-    CLIENT_ADDRESS, HTTP_REQUEST_BODY_SIZE, HTTP_REQUEST_METHOD, HTTP_RESPONSE_BODY_SIZE,
-    HTTP_RESPONSE_STATUS_CODE, HTTP_ROUTE, NETWORK_PROTOCOL_NAME, NETWORK_PROTOCOL_VERSION,
-    URL_PATH, URL_QUERY, URL_SCHEME, USER_AGENT_ORIGINAL,
+    CLIENT_ADDRESS, HTTP_REQUEST_BODY_SIZE, HTTP_RESPONSE_BODY_SIZE, NETWORK_PROTOCOL_NAME,
+    URL_PATH, URL_QUERY, USER_AGENT_ORIGINAL,
 };
+pub(crate) use opentelemetry_semantic_conventions::attribute::{ERROR_TYPE, SERVER_ADDRESS};
+#[cfg(any(feature = "trace", feature = "metrics"))]
 pub(crate) use opentelemetry_semantic_conventions::attribute::{
-    ERROR_TYPE, EXCEPTION_MESSAGE, SERVER_ADDRESS,
+    HTTP_REQUEST_METHOD, HTTP_RESPONSE_STATUS_CODE, HTTP_ROUTE, NETWORK_PROTOCOL_VERSION,
+    URL_SCHEME,
 };
 #[cfg(feature = "messaging")]
 pub(crate) use opentelemetry_semantic_conventions::attribute::{
@@ -24,11 +28,14 @@ pub(crate) use opentelemetry_semantic_conventions::attribute::{
 };
 
 /// The span's name, as `tracing-opentelemetry` reads it.
+#[cfg(any(feature = "trace", feature = "messaging"))]
 pub(crate) const OTEL_NAME: &str = "otel.name";
 /// The span's kind (`server`, `producer`, ...), as `tracing-opentelemetry`
 /// reads it.
+#[cfg(any(feature = "trace", feature = "messaging"))]
 pub(crate) const OTEL_KIND: &str = "otel.kind";
 /// The span's status (`OK` or `ERROR`), as `tracing-opentelemetry` reads it.
+#[cfg(any(feature = "trace", feature = "messaging"))]
 pub(crate) const OTEL_STATUS_CODE: &str = "otel.status_code";
 
 /// The request's `Content-Type`: the conventions' `http.request.header`
@@ -54,12 +61,14 @@ pub(crate) const TIME_TO_FIRST_BYTE: &str = "http.server.time_to_first_byte";
 /// Record integers on spans through this: `tracing-opentelemetry` exports
 /// `i64` as an integer, but has no conversion for `u64`, which it falls back
 /// to exporting as a string (`"200"` rather than `200`).
+#[cfg(any(feature = "trace", feature = "messaging"))]
 pub(crate) fn int(value: impl Into<u64>) -> i64 {
     i64::try_from(value.into()).unwrap_or(i64::MAX)
 }
 
 #[cfg(test)]
 mod tests {
+    #[cfg(any(feature = "trace", feature = "messaging"))]
     #[test]
     fn integers_saturate_into_i64() {
         assert_eq!(super::int(200_u16), 200);

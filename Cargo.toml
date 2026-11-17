@@ -22,7 +22,7 @@ axum            = ["dep:axum"]
 # `messaging`: messaging spans and `MessageTraceLayer` for consumers.
 messaging       = ["dep:opentelemetry", "dep:opentelemetry-semantic-conventions", "dep:tracing", "dep:tracing-opentelemetry"]
 # `HttpMetricsLayer` and the panic counter, through the `metrics` facade.
-metrics         = ["dep:bytes", "dep:metrics"]
+metrics         = ["dep:bytes", "dep:metrics", "dep:opentelemetry-semantic-conventions"]
 # `export_runtime_metrics`: Tokio runtime metrics, sampled once a second.
 runtime-metrics = ["dep:tokio", "dep:tokio-metrics", "metrics"]
 # `OtelTraceLayer`: one OpenTelemetry server span per request.
@@ -45,6 +45,10 @@ required-features = ["metrics", "trace"]
 [[test]]
 name              = "trace"
 required-features = ["trace"]
+
+[[test]]
+name              = "prometheus"
+required-features = ["metrics"]
 
 [[test]]
 name              = "messaging"
