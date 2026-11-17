@@ -48,7 +48,8 @@ pub struct MetricNames {
     /// ready. Default: `http.server.requests` (Prometheus:
     /// `http_server_requests_total`). Not in the conventions, which count
     /// requests from the duration histogram; kept as a plain counter for
-    /// dashboards and alerts that want one.
+    /// dashboards and alerts that want one. Leave it out with
+    /// [`HttpMetricsLayer::with_request_counter`]`(false)`.
     pub requests: &'static str,
     /// Histogram of seconds from the request arriving to the response body
     /// finishing, or the client going away. Covers streamed bodies end to end.

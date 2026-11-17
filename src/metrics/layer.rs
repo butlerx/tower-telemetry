@@ -199,6 +199,9 @@ pub struct HttpMetricsLayer {
     names: MetricNames,
     /// Whether to label metrics with the request's host.
     host_label: bool,
+    /// Whether to leave out the `requests` counter. Inverted so that
+    /// `Default` keeps it.
+    no_request_counter: bool,
 }
 
 impl HttpMetricsLayer {
@@ -217,13 +220,32 @@ impl HttpMetricsLayer {
     pub const fn with_host_label(self, host_label: bool) -> Self {
         Self { host_label, ..self }
     }
+
+    /// Record the `requests` counter (on by default). It isn't in the
+    /// conventions, which count requests from the duration histogram: turn
+    /// it off to count from `duration`'s `_count` alone and drop the
+    /// duplicate series.
+    ///
+    /// ```
+    /// use tower_telemetry::HttpMetricsLayer;
+    ///
+    /// let layer = HttpMetricsLayer::default().with_request_counter(false);
+    /// # let _ = layer;
+    /// ```
+    #[must_use]
+    pub const fn with_request_counter(self, request_counter: bool) -> Self {
+        Self {
+            no_request_counter: !request_counter,
+            ..self
+        }
+    }
 }
 
 impl<S> Layer<S> for HttpMetricsLayer {
     type Service = HttpMetricsService<S>;
 
     fn layer(&self, inner: S) -> Self::Service {
-        describe(&self.names);
+        describe(&self.names, !self.no_request_counter);
         HttpMetricsService {
             inner,
             layer: *self,
@@ -260,7 +282,11 @@ where
     }
 
     fn call(&mut self, request: Request<ReqBody>) -> Self::Future {
-        let HttpMetricsLayer { names, host_label } = self.layer;
+        let HttpMetricsLayer {
+            names,
+            host_label,
+            no_request_counter,
+        } = self.layer;
         let method = Label::new(HTTP_REQUEST_METHOD, request::known_method(request.method()));
         let scheme = Label::new(URL_SCHEME, scheme_label(request::scheme(&request)));
         let host = host_label
@@ -286,6 +312,7 @@ where
         .collect();
         let pending = Pending {
             names,
+            count_requests: !no_request_counter,
             labels,
             started: Instant::now(),
             request_body_size: request::content_length(request.headers()),
@@ -301,12 +328,14 @@ where
 /// Describe each metric's unit to the installed recorder, once per layer
 /// applied. Exporters use it: Prometheus, with recommended naming, turns it
 /// into the `_seconds`, `_bytes` and `_total` suffixes.
-fn describe(names: &MetricNames) {
-    describe_counter!(
-        names.requests,
-        Unit::Count,
-        "HTTP server requests answered."
-    );
+fn describe(names: &MetricNames, count_requests: bool) {
+    if count_requests {
+        describe_counter!(
+            names.requests,
+            Unit::Count,
+            "HTTP server requests answered."
+        );
+    }
     describe_histogram!(
         names.duration,
         Unit::Seconds,
@@ -397,6 +426,8 @@ impl Drop for Active {
 struct Pending {
     /// The names to record under.
     names: MetricNames,
+    /// Whether to record the `requests` counter.
+    count_requests: bool,
     /// The request's labels so far: method, scheme, protocol version, and
     /// route and host when known.
     labels: Vec<Label>,
@@ -418,6 +449,7 @@ impl Pending {
     fn headers_ready(self, outcome: &Outcome, extra: Option<MetricLabels>) -> Recorder {
         let Self {
             names,
+            count_requests,
             labels,
             started,
             request_body_size,
@@ -433,7 +465,9 @@ impl Pending {
                     .map(|(key, value)| Label::new(key, value)),
             )
             .collect();
-        counter!(names.requests, labels.clone()).increment(1);
+        if count_requests {
+            counter!(names.requests, labels.clone()).increment(1);
+        }
         histogram!(names.time_to_first_byte, labels.clone())
             .record(started.elapsed().as_secs_f64());
         if let Some(size) = request_body_size.filter(|size| *size > 0) {
@@ -652,6 +686,43 @@ mod tests {
         assert_eq!(value, &DebugValue::Gauge(0.0.into()));
         let labels: Vec<_> = key.key().labels().map(Label::key).collect();
         assert_eq!(labels, ["http.request.method", "url.scheme"]);
+    }
+
+    #[tokio::test]
+    async fn the_request_counter_can_be_left_out() {
+        let recorder = DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+        let _guard = ::metrics::set_default_local_recorder(&recorder);
+
+        let service = ServiceBuilder::new()
+            .layer(HttpMetricsLayer::default().with_request_counter(false))
+            .service(service_fn(|_request: Request<()>| async {
+                Ok::<_, Infallible>(Response::new(Full::new(Bytes::from_static(b"hello"))))
+            }));
+        let response = service
+            .oneshot(Request::get("/").body(()).expect("static request"))
+            .await
+            .expect("infallible");
+        response.into_body().collect().await.expect("infallible");
+
+        let names: Vec<_> = snapshotter
+            .snapshot()
+            .into_vec()
+            .into_iter()
+            .map(|(key, ..)| key.key().name().to_owned())
+            .collect();
+        assert!(
+            !names
+                .iter()
+                .any(|name| name == MetricNames::DEFAULT.requests),
+            "{names:?}"
+        );
+        assert!(
+            names
+                .iter()
+                .any(|name| name == MetricNames::DEFAULT.duration),
+            "the duration histogram still counts requests: {names:?}"
+        );
     }
 
     /// The outcome labels of `requests` for one request answered by
