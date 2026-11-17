@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.1.0](https://github.com/butlerx/tower-telemetry/compare/v0.0.1...v0.1.0) (2026-11-17)
+
+
+### ⚠ BREAKING CHANGES
+
+* OpenTelemetry metric names, labels and units by default ([#7](https://github.com/butlerx/tower-telemetry/issues/7))
+
+### Features
+
+* OpenTelemetry metric names, labels and units by default ([#7](https://github.com/butlerx/tower-telemetry/issues/7)) ([8177ba5](https://github.com/butlerx/tower-telemetry/commit/8177ba593ae67d67cf608dc1edcb1072fd9a1cd4))
+
 ## [0.0.1](https://github.com/butlerx/tower-telemetry/compare/v0.0.0...v0.0.1) (2026-11-16)
 
 
