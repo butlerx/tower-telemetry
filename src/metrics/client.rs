@@ -10,7 +10,7 @@ use tower_layer::Layer;
 use tower_service::Service;
 
 use super::MetricNames;
-use super::layer::host_labels;
+use super::layer::{LABEL_CAPACITY, host_labels};
 use super::recording::{Active, MetricsBody, MetricsFuture, Pending, Side, describe};
 use crate::attribute::{HTTP_REQUEST_METHOD, NETWORK_PROTOCOL_VERSION};
 use crate::request;
@@ -137,13 +137,13 @@ where
                 .chain(target.iter().cloned())
                 .collect(),
         );
-        let labels = std::iter::once(method)
-            .chain(target)
-            .chain(std::iter::once(Label::new(
-                NETWORK_PROTOCOL_VERSION,
-                request::http_version(request.version()),
-            )))
-            .collect();
+        let mut labels = Vec::with_capacity(LABEL_CAPACITY);
+        labels.push(method);
+        labels.extend(target);
+        labels.push(Label::new(
+            NETWORK_PROTOCOL_VERSION,
+            request::http_version(request.version()),
+        ));
         let pending = Pending {
             names,
             side: Side::Client,

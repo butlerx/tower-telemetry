@@ -42,6 +42,11 @@ required-features = ["axum", "metrics", "trace"]
 name              = "hyper"
 required-features = ["metrics", "trace"]
 
+[[bench]]
+harness           = false
+name              = "layers"
+required-features = ["axum", "messaging", "metrics", "trace"]
+
 [[test]]
 name              = "trace"
 required-features = ["trace"]
@@ -74,6 +79,7 @@ tracing-opentelemetry              = { version = "0.34.0", default-features = fa
 [dev-dependencies]
 axum                        = { version = "0.8.9", features = ["http1", "tokio"] }
 bytes                       = "1"
+criterion                   = { version = "0.8.2", default-features = false, features = ["async_tokio"] }
 http-body-util              = "0.1"
 hyper                       = { version = "1", features = ["http1", "server"] }
 hyper-util                  = { version = "0.1", features = ["service", "tokio"] }

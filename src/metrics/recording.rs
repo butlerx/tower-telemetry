@@ -14,7 +14,7 @@ use bytes::Buf;
 use http::{Response, StatusCode};
 use http_body::{Body, Frame, SizeHint};
 
-use super::{MetricLabels, MetricNames};
+use super::{MetricLabels, MetricNames, label};
 use crate::attribute::{ERROR_TYPE, HTTP_RESPONSE_STATUS_CODE};
 
 /// Which end of the request the metrics are for. The conventions differ
@@ -87,11 +87,10 @@ impl Outcome {
     #[inline]
     fn labels(&self, side: Side) -> impl Iterator<Item = Label> {
         let (status, error) = match self {
-            Self::Answered(status) => (
-                Some(status.as_str().to_owned()),
-                side.is_error(*status)
-                    .then(|| status.as_str().to_owned().into()),
-            ),
+            Self::Answered(status) => {
+                let value = label::status(*status);
+                (Some(value.clone()), side.is_error(*status).then_some(value))
+            }
             Self::Failed => (None, Some(SharedString::const_str("_OTHER"))),
         };
         status
@@ -154,16 +153,17 @@ impl Pending {
             request_body_size,
             active,
         } = self;
-        let labels: Vec<Label> = labels
-            .into_iter()
-            .chain(outcome.labels(side))
-            .chain(
+        // Extended in place: the request's labels were allocated with room
+        // for the outcome's.
+        let mut labels = labels;
+        labels.extend(outcome.labels(side));
+        if let Some(MetricLabels(extra)) = extra {
+            labels.extend(
                 extra
                     .into_iter()
-                    .flat_map(|MetricLabels(extra)| extra)
-                    .map(|(key, value)| Label::new(key, value)),
-            )
-            .collect();
+                    .map(|(key, value)| Label::new(key, label::from_cow(value))),
+            );
+        }
         counter!(names.requests, labels.clone()).increment(1);
         histogram!(names.time_to_first_byte, labels.clone())
             .record(started.elapsed().as_secs_f64());

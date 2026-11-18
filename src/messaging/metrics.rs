@@ -13,7 +13,9 @@ mod enabled {
     use std::sync::Once;
     use std::time::Instant;
 
-    use ::metrics::{Label, Unit, counter, describe_counter, describe_histogram, histogram};
+    use ::metrics::{
+        Label, SharedString, Unit, counter, describe_counter, describe_histogram, histogram,
+    };
     use opentelemetry_semantic_conventions::metric::{
         MESSAGING_CLIENT_CONSUMED_MESSAGES, MESSAGING_CLIENT_OPERATION_DURATION,
         MESSAGING_CLIENT_SENT_MESSAGES, MESSAGING_PROCESS_DURATION,
@@ -25,6 +27,30 @@ mod enabled {
         SERVER_PORT,
     };
     use crate::messaging::{MessagingOperation, MessagingSpan};
+    use crate::metrics::label;
+
+    /// `messaging.system`: static for the conventions' well-known values,
+    /// shared for the rest.
+    #[inline]
+    fn system(system: &str) -> SharedString {
+        const KNOWN: [&str; 11] = [
+            "aws_sqs",
+            "kafka",
+            "rabbitmq",
+            "gcp_pubsub",
+            "servicebus",
+            "eventhubs",
+            "eventgrid",
+            "pulsar",
+            "rocketmq",
+            "activemq",
+            "jms",
+        ];
+        KNOWN
+            .into_iter()
+            .find(|known| *known == system)
+            .map_or_else(|| label::shared(system), SharedString::const_str)
+    }
 
     /// Describes the metrics' units to the recorder, once per process.
     static DESCRIBE: Once = Once::new();
@@ -91,23 +117,26 @@ mod enabled {
                 | MessagingOperation::Settle => (MESSAGING_CLIENT_OPERATION_DURATION, None),
             };
             let labels = [
-                Some(Label::new(MESSAGING_SYSTEM, span.system.to_owned())),
+                Some(Label::new(MESSAGING_SYSTEM, system(span.system))),
                 Some(Label::new(
                     MESSAGING_OPERATION_NAME,
-                    span.operation_name.unwrap_or(operation.as_str()).to_owned(),
+                    span.operation_name.map_or_else(
+                        || SharedString::const_str(operation.as_str()),
+                        label::shared,
+                    ),
                 )),
                 // `process` has no operation type label in the conventions.
                 (operation != MessagingOperation::Process)
                     .then(|| Label::new(MESSAGING_OPERATION_TYPE, operation.as_str())),
                 span.destination_template
                     .or(span.destination)
-                    .map(|name| Label::new(MESSAGING_DESTINATION_NAME, name.to_owned())),
+                    .map(|name| Label::new(MESSAGING_DESTINATION_NAME, label::shared(name))),
                 span.consumer_group
-                    .map(|name| Label::new(MESSAGING_CONSUMER_GROUP_NAME, name.to_owned())),
+                    .map(|name| Label::new(MESSAGING_CONSUMER_GROUP_NAME, label::shared(name))),
                 span.server_address
-                    .map(|address| Label::new(SERVER_ADDRESS, address.to_owned())),
+                    .map(|address| Label::new(SERVER_ADDRESS, label::shared(address))),
                 span.server_port
-                    .map(|port| Label::new(SERVER_PORT, port.to_string())),
+                    .map(|port| Label::new(SERVER_PORT, label::port(port))),
             ]
             .into_iter()
             .flatten()

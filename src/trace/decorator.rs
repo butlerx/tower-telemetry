@@ -5,8 +5,9 @@ use std::borrow::Cow;
 use http::{Request, Response};
 use opentelemetry_http::HeaderInjector;
 use tracing::Span;
+use tracing_opentelemetry::OpenTelemetrySpanExt;
 
-use crate::attribute::OTEL_STATUS_CODE;
+use crate::attribute::{ERROR_TYPE, OTEL_STATUS_CODE};
 use crate::request;
 
 /// How a service names and enriches its request spans. Every method has a
@@ -45,7 +46,7 @@ use crate::request;
 ///         }
 ///     }
 ///
-///     fn on_response<B>(span: &Span, _context: &opentelemetry::Context, response: &mut Response<B>) {
+///     fn on_response<B>(span: &Span, response: &mut Response<B>) {
 ///         if let Some(cache) = response
 ///             .headers()
 ///             .get("x-cache")
@@ -109,30 +110,34 @@ pub trait SpanDecorator {
     /// nothing.
     fn on_request<B>(_request: &Request<B>, _span: &Span) {}
 
-    /// Record response fields, or change the response. `context` is the
-    /// span's OpenTelemetry context. The default marks `5xx` responses as
-    /// errors, as OpenTelemetry's HTTP conventions do for servers.
-    fn on_response<B>(span: &Span, _context: &opentelemetry::Context, response: &mut Response<B>) {
+    /// Record response fields, or change the response. The default marks
+    /// `5xx` responses as errors, as OpenTelemetry's HTTP conventions do for
+    /// servers.
+    ///
+    /// For the span's OpenTelemetry context, call `span.context()` from
+    /// `OpenTelemetrySpanExt`. It isn't passed in, so decorators that don't
+    /// need it don't pay to look it up on every request.
+    fn on_response<B>(span: &Span, response: &mut Response<B>) {
         mark_server_errors(span, response);
     }
 }
 
-/// Record `otel.status_code` on `span`: `ERROR` for a `5xx` response, `OK`
-/// otherwise.
+/// Mark `span` as an error (`otel.status_code` `ERROR`, and `error.type` the
+/// status code) for a `5xx` response, and leave its status unset otherwise.
 ///
 /// OpenTelemetry's HTTP conventions mark server spans as errors only for
-/// `5xx`: a `4xx` is the client's mistake, not the server's. The default
+/// `5xx`: a `4xx` is the client's mistake, not the server's. They also ask
+/// instrumentation not to set `OK`, leaving that to the application, so a
+/// successful response leaves the status unset. The default
 /// [`SpanDecorator::on_response`] calls it; call it from your own
 /// `on_response` to keep that behaviour.
+#[inline]
 pub fn mark_server_errors<B>(span: &Span, response: &Response<B>) {
-    span.record(
-        OTEL_STATUS_CODE,
-        if response.status().is_server_error() {
-            "ERROR"
-        } else {
-            "OK"
-        },
-    );
+    let status = response.status();
+    if status.is_server_error() {
+        span.record(OTEL_STATUS_CODE, "ERROR");
+        span.record(ERROR_TYPE, status.as_str());
+    }
 }
 
 /// The [`SpanDecorator`] [`OtelTraceLayer`](crate::OtelTraceLayer) uses by
@@ -157,9 +162,10 @@ impl SpanDecorator for PropagatingSpanDecorator {
     /// global propagator (`traceparent` and `tracestate` with the W3C one), then
     /// mark `5xx` responses as errors like the default. Callers can then log or
     /// show the trace id of their request.
-    fn on_response<B>(span: &Span, context: &opentelemetry::Context, response: &mut Response<B>) {
+    fn on_response<B>(span: &Span, response: &mut Response<B>) {
+        let context = span.context();
         opentelemetry::global::get_text_map_propagator(|propagator| {
-            propagator.inject_context(context, &mut HeaderInjector(response.headers_mut()));
+            propagator.inject_context(&context, &mut HeaderInjector(response.headers_mut()));
         });
         mark_server_errors(span, response);
     }
