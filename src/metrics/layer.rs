@@ -1,27 +1,21 @@
 //! [`HttpMetricsLayer`]: request metrics through the [`metrics`](::metrics)
 //! facade.
 
-use std::future::Future;
-use std::pin::Pin;
-use std::task::{Context, Poll, ready};
+use std::borrow::Cow;
+use std::task::{Context, Poll};
 use std::time::Instant;
 
-use std::borrow::Cow;
-
-use ::metrics::{
-    Gauge, Label, SharedString, Unit, counter, describe_counter, describe_gauge,
-    describe_histogram, gauge, histogram,
-};
-use bytes::Buf;
-use http::{Request, Response, StatusCode};
-use http_body::{Body, Frame, SizeHint};
+use ::metrics::{Label, SharedString};
+use http::{Request, Response};
+use http_body::Body;
 use tower_layer::Layer;
 use tower_service::Service;
 
 use super::MetricNames;
+use super::recording::{Active, MetricsBody, MetricsFuture, Pending, Side, describe};
 use crate::attribute::{
-    ERROR_TYPE, HTTP_REQUEST_METHOD, HTTP_RESPONSE_STATUS_CODE, HTTP_ROUTE,
-    NETWORK_PROTOCOL_VERSION, SERVER_ADDRESS, URL_SCHEME,
+    HTTP_REQUEST_METHOD, HTTP_ROUTE, NETWORK_PROTOCOL_VERSION, SERVER_ADDRESS, SERVER_PORT,
+    URL_SCHEME,
 };
 use crate::request;
 
@@ -117,7 +111,8 @@ pub struct MetricLabels(
 /// | `http.route`                | axum's matched route (feature `axum`); left off when none | all but active     |
 /// | `http.response.status_code` | the response status; left off when the service failed     | all but active     |
 /// | `error.type`                | the status code for a `5xx`, `_OTHER` when the service failed; left off otherwise | all but active |
-/// | `server.address`            | only with [`with_host_label(true)`](Self::with_host_label) | all               |
+/// | `server.address`            | the host, without the port; only with [`with_host_label(true)`](Self::with_host_label) | all |
+/// | `server.port`               | the port, else the scheme's default; only with [`with_host_label(true)`](Self::with_host_label) | all |
 /// | yours                       | any [`MetricLabels`] the response carries                 | all but active     |
 ///
 /// The route, never the path, keeps the number of series bounded. Without
@@ -209,10 +204,12 @@ impl HttpMetricsLayer {
         Self { names, ..self }
     }
 
-    /// Label metrics with `server.address`: `X-Forwarded-Host`, else `Host`.
-    /// The conventions make it opt-in, and so does this: the client picks
-    /// it, so turn it on only behind a proxy that restricts it to your own
-    /// domains, or every made-up host is a new time series.
+    /// Label metrics with `server.address` and `server.port`: the host and
+    /// port of `X-Forwarded-Host`, else `Host`, with the scheme's default
+    /// port (80 or 443) when it has none. The conventions make both opt-in,
+    /// and so does this: the client picks them, so turn it on only behind a
+    /// proxy that restricts them to your own domains, or every made-up host
+    /// is a new time series.
     #[must_use]
     pub const fn with_host_label(self, host_label: bool) -> Self {
         Self { host_label, ..self }
@@ -223,7 +220,7 @@ impl<S> Layer<S> for HttpMetricsLayer {
     type Service = HttpMetricsService<S>;
 
     fn layer(&self, inner: S) -> Self::Service {
-        describe(&self.names);
+        describe(&self.names, Side::Server);
         HttpMetricsService {
             inner,
             layer: *self,
@@ -264,7 +261,10 @@ where
         let method = Label::new(HTTP_REQUEST_METHOD, request::known_method(request.method()));
         let scheme = Label::new(URL_SCHEME, scheme_label(request::scheme(&request)));
         let host = host_label
-            .then(|| Label::new(SERVER_ADDRESS, request::host(request.headers()).to_owned()));
+            .then(|| host_labels(request::server_address(&request)))
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
         let active = Active::new(
             names.active_requests,
             [method.clone(), scheme.clone()]
@@ -286,52 +286,20 @@ where
         .collect();
         let pending = Pending {
             names,
+            side: Side::Server,
             labels,
             started: Instant::now(),
             request_body_size: request::content_length(request.headers()),
             active,
         };
-        MetricsFuture {
-            pending: Some(pending),
-            inner: self.inner.call(request),
-        }
+        MetricsFuture::new(self.inner.call(request), pending)
     }
 }
 
-/// Describe each metric's unit to the installed recorder, once per layer
-/// applied. Exporters use it: Prometheus, with recommended naming, turns it
-/// into the `_seconds`, `_bytes` and `_total` suffixes.
-fn describe(names: &MetricNames) {
-    describe_counter!(
-        names.requests,
-        Unit::Count,
-        "HTTP server requests answered."
-    );
-    describe_histogram!(
-        names.duration,
-        Unit::Seconds,
-        "Duration of HTTP server requests, to the end of the response body."
-    );
-    describe_histogram!(
-        names.time_to_first_byte,
-        Unit::Seconds,
-        "Time from an HTTP request arriving to its response headers being ready."
-    );
-    describe_histogram!(
-        names.request_body_size,
-        Unit::Bytes,
-        "Size of HTTP server request bodies, as declared by Content-Length."
-    );
-    describe_histogram!(
-        names.response_body_size,
-        Unit::Bytes,
-        "Size of HTTP server response bodies, as sent."
-    );
-    describe_gauge!(
-        names.active_requests,
-        Unit::Count,
-        "HTTP server requests in progress."
-    );
+/// `server.address` and, when known, `server.port`.
+pub(super) fn host_labels((address, port): (&str, Option<u16>)) -> impl Iterator<Item = Label> {
+    std::iter::once(Label::new(SERVER_ADDRESS, address.to_owned()))
+        .chain(port.map(|port| Label::new(SERVER_PORT, port.to_string())))
 }
 
 /// `url.scheme` without allocating for the usual two.
@@ -340,235 +308,6 @@ fn scheme_label(scheme: &str) -> SharedString {
         "https" => SharedString::const_str("https"),
         "http" => SharedString::const_str("http"),
         other => SharedString::from(other.to_owned()),
-    }
-}
-
-/// How a request ended, as its labels record it.
-enum Outcome {
-    /// The service answered with this status.
-    Answered(StatusCode),
-    /// The service failed without answering.
-    Failed,
-}
-
-impl Outcome {
-    /// `http.response.status_code` when there's a response, and `error.type`
-    /// when the request failed: the status code for a `5xx`, `_OTHER` when
-    /// there's no response, as the conventions ask.
-    fn labels(&self) -> impl Iterator<Item = Label> {
-        let (status, error) = match self {
-            Self::Answered(status) => (
-                Some(status.as_str().to_owned()),
-                status
-                    .is_server_error()
-                    .then(|| status.as_str().to_owned().into()),
-            ),
-            Self::Failed => (None, Some(SharedString::const_str("_OTHER"))),
-        };
-        status
-            .map(|status| Label::new(HTTP_RESPONSE_STATUS_CODE, status))
-            .into_iter()
-            .chain(error.map(|error| Label::new(ERROR_TYPE, error)))
-    }
-}
-
-/// Counts a request as active until dropped: also when the client goes away
-/// and the future or body is dropped unfinished.
-struct Active(Gauge);
-
-impl Active {
-    /// Count one more request in the gauge `name`, with `labels`.
-    fn new(name: &'static str, labels: Vec<Label>) -> Self {
-        let gauge = gauge!(name, labels);
-        gauge.increment(1);
-        Self(gauge)
-    }
-}
-
-impl Drop for Active {
-    fn drop(&mut self) {
-        self.0.decrement(1);
-    }
-}
-
-/// A request waiting for its response: what [`MetricsFuture`] knows
-/// before the response headers are ready. Dropped unanswered, it records
-/// nothing; only its [`Active`] guard decrements the gauge.
-struct Pending {
-    /// The names to record under.
-    names: MetricNames,
-    /// The request's labels so far: method, scheme, protocol version, and
-    /// route and host when known.
-    labels: Vec<Label>,
-    /// When the request arrived.
-    started: Instant,
-    /// The declared request body size, from `Content-Length`.
-    request_body_size: Option<u64>,
-    /// Counts the request in `active_requests` until dropped.
-    active: Active,
-}
-
-impl Pending {
-    /// Record what is known once the response headers are ready, and hand
-    /// the rest to a [`Recorder`] for the end of the body.
-    #[expect(
-        clippy::cast_precision_loss,
-        reason = "histogram samples, not exact values"
-    )]
-    fn headers_ready(self, outcome: &Outcome, extra: Option<MetricLabels>) -> Recorder {
-        let Self {
-            names,
-            labels,
-            started,
-            request_body_size,
-            active,
-        } = self;
-        let labels: Vec<Label> = labels
-            .into_iter()
-            .chain(outcome.labels())
-            .chain(
-                extra
-                    .into_iter()
-                    .flat_map(|MetricLabels(extra)| extra)
-                    .map(|(key, value)| Label::new(key, value)),
-            )
-            .collect();
-        counter!(names.requests, labels.clone()).increment(1);
-        histogram!(names.time_to_first_byte, labels.clone())
-            .record(started.elapsed().as_secs_f64());
-        if let Some(size) = request_body_size.filter(|size| *size > 0) {
-            histogram!(names.request_body_size, labels.clone()).record(size as f64);
-        }
-        Recorder {
-            names,
-            labels,
-            started,
-            response_body_size: 0,
-            _active: active,
-        }
-    }
-}
-
-/// An answered request, carried to the end of its response body. Records
-/// `duration` and `response_body_size` on drop.
-struct Recorder {
-    /// The names to record under.
-    names: MetricNames,
-    /// The request's labels, complete with its outcome and any
-    /// [`MetricLabels`].
-    labels: Vec<Label>,
-    /// When the request arrived.
-    started: Instant,
-    /// Response body bytes sent so far.
-    response_body_size: u64,
-    /// Held only for its `Drop`.
-    _active: Active,
-}
-
-impl Drop for Recorder {
-    #[expect(
-        clippy::cast_precision_loss,
-        reason = "histogram samples, not exact values"
-    )]
-    fn drop(&mut self) {
-        let labels = std::mem::take(&mut self.labels);
-        histogram!(self.names.duration, labels.clone())
-            .record(self.started.elapsed().as_secs_f64());
-        histogram!(self.names.response_body_size, labels).record(self.response_body_size as f64);
-    }
-}
-
-pin_project_lite::pin_project! {
-    /// The future [`HttpMetricsService`] returns: the inner service's response
-    /// future, plus the request's labels and start time.
-    ///
-    /// When the response is ready, it records the request count, time to first
-    /// byte and request body size, and moves the rest of the recording into the
-    /// response's [`MetricsBody`]. If the inner service fails, it records the
-    /// request with `status_code` `error`. If it's dropped before either, it
-    /// records nothing but still decrements `active_requests`.
-    pub struct MetricsFuture<F> {
-        // The inner service's response future.
-        #[pin]
-        inner: F,
-        // Taken when the response is ready, and turned into its body's
-        // recorder.
-        pending: Option<Pending>,
-    }
-}
-
-impl<F, ResBody, E> Future for MetricsFuture<F>
-where
-    F: Future<Output = Result<Response<ResBody>, E>>,
-    ResBody: Body,
-{
-    type Output = Result<Response<MetricsBody<ResBody>>, E>;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = self.project();
-        let result = ready!(this.inner.poll(cx));
-        let pending = this.pending.take();
-        Poll::Ready(match result {
-            Ok(mut response) => {
-                let extra = response.extensions_mut().remove::<MetricLabels>();
-                let outcome = Outcome::Answered(response.status());
-                let recorder = pending.map(|pending| pending.headers_ready(&outcome, extra));
-                Ok(response.map(|inner| MetricsBody { inner, recorder }))
-            }
-            Err(err) => {
-                // Recorded, with no body, as the recorder drops here.
-                drop(pending.map(|pending| pending.headers_ready(&Outcome::Failed, None)));
-                Err(err)
-            }
-        })
-    }
-}
-
-pin_project_lite::pin_project! {
-    /// The response body [`HttpMetricsService`] answers with: the inner body,
-    /// counting the bytes it sends.
-    ///
-    /// It records the request's duration and response size when the body
-    /// finishes, fails, or is dropped (the client went away), whichever comes
-    /// first, then decrements `active_requests`. Frames, trailers, size hints and
-    /// end of stream pass through unchanged, so it serves like the body it wraps.
-    pub struct MetricsBody<B> {
-        // The inner response body.
-        #[pin]
-        inner: B,
-        // Taken, and so recorded, when the body finishes or fails.
-        recorder: Option<Recorder>,
-    }
-}
-
-impl<B: Body> Body for MetricsBody<B> {
-    type Data = B::Data;
-    type Error = B::Error;
-
-    fn poll_frame(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
-        let this = self.project();
-        let frame = ready!(this.inner.poll_frame(cx));
-        match &frame {
-            Some(Ok(frame)) => {
-                if let (Some(data), Some(recorder)) = (frame.data_ref(), this.recorder.as_mut()) {
-                    recorder.response_body_size += data.remaining() as u64;
-                }
-            }
-            // Finished or failed: record now, not when the body is dropped.
-            Some(Err(_)) | None => drop(this.recorder.take()),
-        }
-        Poll::Ready(frame)
-    }
-
-    fn is_end_stream(&self) -> bool {
-        self.inner.is_end_stream()
-    }
-
-    fn size_hint(&self) -> SizeHint {
-        self.inner.size_hint()
     }
 }
 
@@ -581,6 +320,9 @@ mod tests {
     use http_body_util::{BodyExt, Full};
     use metrics_util::debugging::{DebugValue, DebuggingRecorder};
     use tower::{ServiceBuilder, ServiceExt, service_fn};
+
+    use ::metrics::Unit;
+    use http::StatusCode;
 
     use super::*;
 

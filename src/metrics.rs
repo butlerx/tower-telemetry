@@ -1,30 +1,42 @@
 //! HTTP and process metrics through the [`metrics`] facade.
 //!
+//! - [`HttpMetricsLayer`]: metrics for the requests a server answers.
+//! - [`HttpClientMetricsLayer`]: metrics for the requests a client sends.
+//! - [`install_panic_counter`] and, with `runtime-metrics`,
+//!   [`export_runtime_metrics`]: the process itself.
+//!
 //! This crate records; it does not export. Install any `metrics` exporter
 //! (`metrics-exporter-prometheus`, `metrics-exporter-dogstatsd`, ...) once per
 //! process, and use [`DURATION_BUCKETS`] and [`BODY_SIZE_BUCKETS`] for the
 //! histograms when it takes buckets.
 
 use opentelemetry_semantic_conventions::metric::{
-    HTTP_SERVER_ACTIVE_REQUESTS, HTTP_SERVER_REQUEST_BODY_SIZE, HTTP_SERVER_REQUEST_DURATION,
-    HTTP_SERVER_RESPONSE_BODY_SIZE,
+    HTTP_CLIENT_ACTIVE_REQUESTS, HTTP_CLIENT_REQUEST_BODY_SIZE, HTTP_CLIENT_REQUEST_DURATION,
+    HTTP_CLIENT_RESPONSE_BODY_SIZE, HTTP_SERVER_ACTIVE_REQUESTS, HTTP_SERVER_REQUEST_BODY_SIZE,
+    HTTP_SERVER_REQUEST_DURATION, HTTP_SERVER_RESPONSE_BODY_SIZE,
 };
 
+mod client;
 mod layer;
 mod process;
+mod recording;
 #[cfg(feature = "runtime-metrics")]
 mod runtime;
 
-pub use layer::{HttpMetricsLayer, HttpMetricsService, MetricLabels, MetricsBody, MetricsFuture};
+pub use client::{HttpClientMetricsLayer, HttpClientMetricsService};
+pub use layer::{HttpMetricsLayer, HttpMetricsService, MetricLabels};
 pub use process::install_panic_counter;
+pub use recording::{MetricsBody, MetricsFuture};
 #[cfg(feature = "runtime-metrics")]
 pub use runtime::export_runtime_metrics;
 
-/// The names [`HttpMetricsLayer`] records under, one per metric.
+/// The names [`HttpMetricsLayer`] and [`HttpClientMetricsLayer`] record
+/// under, one per metric.
 ///
-/// The defaults ([`MetricNames::DEFAULT`]) are OpenTelemetry's HTTP server
-/// metric names, and the two the conventions don't define follow their
-/// style. Exporters adapt them: Prometheus with recommended naming turns
+/// The defaults are OpenTelemetry's HTTP metric names:
+/// [`MetricNames::DEFAULT`] for servers and [`MetricNames::CLIENT`] for
+/// clients. The two the conventions don't define, the request counter and
+/// time to first byte, follow their style. Exporters adapt them: Prometheus with recommended naming turns
 /// `http.server.request.duration` into `http_server_request_duration_seconds`,
 /// and `DogStatsD` sends it as is.
 ///
@@ -40,7 +52,8 @@ pub use runtime::export_runtime_metrics;
 /// };
 /// ```
 ///
-/// Pass them to [`HttpMetricsLayer::with_names`]. The names are
+/// Pass them to [`HttpMetricsLayer::with_names`] or
+/// [`HttpClientMetricsLayer::with_names`]. The names are
 /// `&'static str`, so nothing is allocated per request to look them up.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MetricNames {
@@ -97,6 +110,27 @@ impl MetricNames {
         request_body_size: HTTP_SERVER_REQUEST_BODY_SIZE,
         response_body_size: HTTP_SERVER_RESPONSE_BODY_SIZE,
         active_requests: HTTP_SERVER_ACTIVE_REQUESTS,
+    };
+
+    /// The client defaults, for [`HttpClientMetricsLayer`]: OpenTelemetry's
+    /// HTTP client metrics, plus the same two extras in the `http.client`
+    /// namespace.
+    ///
+    /// | Field                | Name                             | Unit    | In the conventions |
+    /// | -------------------- | -------------------------------- | ------- | ------------------ |
+    /// | `requests`           | `http.client.requests`           | count   | no                 |
+    /// | `duration`           | `http.client.request.duration`   | seconds | yes                |
+    /// | `time_to_first_byte` | `http.client.time_to_first_byte` | seconds | no                 |
+    /// | `request_body_size`  | `http.client.request.body.size`  | bytes   | yes                |
+    /// | `response_body_size` | `http.client.response.body.size` | bytes   | yes                |
+    /// | `active_requests`    | `http.client.active_requests`    | count   | yes                |
+    pub const CLIENT: Self = Self {
+        requests: "http.client.requests",
+        duration: HTTP_CLIENT_REQUEST_DURATION,
+        time_to_first_byte: "http.client.time_to_first_byte",
+        request_body_size: HTTP_CLIENT_REQUEST_BODY_SIZE,
+        response_body_size: HTTP_CLIENT_RESPONSE_BODY_SIZE,
+        active_requests: HTTP_CLIENT_ACTIVE_REQUESTS,
     };
 
     /// The two duration histograms, `duration` and `time_to_first_byte`: the

@@ -8,10 +8,11 @@
 
 #[cfg(any(feature = "trace", feature = "messaging"))]
 pub(crate) use opentelemetry_semantic_conventions::attribute::EXCEPTION_MESSAGE;
+pub(crate) use opentelemetry_semantic_conventions::attribute::SERVER_PORT;
 #[cfg(feature = "trace")]
 pub(crate) use opentelemetry_semantic_conventions::attribute::{
     CLIENT_ADDRESS, HTTP_REQUEST_BODY_SIZE, HTTP_RESPONSE_BODY_SIZE, NETWORK_PROTOCOL_NAME,
-    URL_PATH, URL_QUERY, USER_AGENT_ORIGINAL,
+    URL_FULL, URL_PATH, URL_QUERY, USER_AGENT_ORIGINAL,
 };
 pub(crate) use opentelemetry_semantic_conventions::attribute::{ERROR_TYPE, SERVER_ADDRESS};
 #[cfg(any(feature = "trace", feature = "metrics"))]
@@ -24,7 +25,6 @@ pub(crate) use opentelemetry_semantic_conventions::attribute::{
     MESSAGING_BATCH_MESSAGE_COUNT, MESSAGING_CONSUMER_GROUP_NAME, MESSAGING_DESTINATION_NAME,
     MESSAGING_DESTINATION_TEMPLATE, MESSAGING_MESSAGE_BODY_SIZE, MESSAGING_MESSAGE_CONVERSATION_ID,
     MESSAGING_MESSAGE_ID, MESSAGING_OPERATION_NAME, MESSAGING_OPERATION_TYPE, MESSAGING_SYSTEM,
-    SERVER_PORT,
 };
 
 /// The span's name, as `tracing-opentelemetry` reads it.

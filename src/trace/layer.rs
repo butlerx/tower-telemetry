@@ -23,7 +23,8 @@ use crate::attribute::{
     HTTP_REQUEST_HEADER_CONTENT_TYPE, HTTP_REQUEST_METHOD, HTTP_RESPONSE_BODY_SIZE,
     HTTP_RESPONSE_HEADER_CONTENT_TYPE, HTTP_RESPONSE_STATUS_CODE, HTTP_ROUTE,
     NETWORK_PROTOCOL_NAME, NETWORK_PROTOCOL_VERSION, OTEL_KIND, OTEL_NAME, OTEL_STATUS_CODE,
-    SERVER_ADDRESS, TIME_TO_FIRST_BYTE, URL_PATH, URL_QUERY, URL_SCHEME, USER_AGENT_ORIGINAL, int,
+    SERVER_ADDRESS, SERVER_PORT, TIME_TO_FIRST_BYTE, URL_PATH, URL_QUERY, URL_SCHEME,
+    USER_AGENT_ORIGINAL, int,
 };
 use crate::request;
 
@@ -76,7 +77,7 @@ use crate::request;
 /// | `http.route`                                     | axum's matched route (feature `axum`)    |
 /// | `url.path`, `url.query`                          | the URI                                  |
 /// | `url.scheme`                                     | `X-Forwarded-Proto`, else the URI, else `http` |
-/// | `server.address`                                 | `X-Forwarded-Host`, else `Host`          |
+/// | `server.address`, `server.port`                  | `X-Forwarded-Host`, else `Host`; the port defaults by scheme |
 /// | `client.address`                                 | `X-Client-IP`, else the first `X-Forwarded-For` |
 /// | `network.protocol.version`                       | the HTTP version                         |
 /// | `user_agent.original`                            | `User-Agent`                             |
@@ -299,6 +300,7 @@ where
 /// trace context in its headers.
 fn make_span<B, D: SpanDecorator>(request: &Request<B>) -> Span {
     let headers = request.headers();
+    let (address, port) = request::server_address(request);
     let span = tracing::info_span!(
         target: "tower_telemetry",
         "HTTP request",
@@ -312,7 +314,8 @@ fn make_span<B, D: SpanDecorator>(request: &Request<B>) -> Span {
         { URL_SCHEME } = request::scheme(request),
         { NETWORK_PROTOCOL_NAME } = "http",
         { NETWORK_PROTOCOL_VERSION } = request::http_version(request.version()),
-        { SERVER_ADDRESS } = request::host(headers),
+        { SERVER_ADDRESS } = address,
+        { SERVER_PORT } = port.map(i64::from),
         { CLIENT_ADDRESS } = request::client_ip(headers),
         { USER_AGENT_ORIGINAL } = request::header(headers, &USER_AGENT),
         { HTTP_REQUEST_HEADER_CONTENT_TYPE } = request::header(headers, &CONTENT_TYPE),

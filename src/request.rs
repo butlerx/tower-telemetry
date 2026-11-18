@@ -50,6 +50,105 @@ pub(crate) fn host(headers: &HeaderMap) -> &str {
     }
 }
 
+/// Split a `host[:port]` authority, as `Host` and `X-Forwarded-Host` carry
+/// it, into the host and port. IPv6 hosts lose their brackets, as
+/// `server.address` records them; a port that isn't a number is dropped.
+#[cfg(any(feature = "trace", feature = "metrics"))]
+pub(crate) fn split_host_port(authority: &str) -> (&str, Option<u16>) {
+    if let Some(bracketed) = authority.strip_prefix('[') {
+        let (host, rest) = bracketed.split_once(']').unwrap_or((bracketed, ""));
+        return (
+            host,
+            rest.strip_prefix(':').and_then(|port| port.parse().ok()),
+        );
+    }
+    match authority.rsplit_once(':') {
+        // A bare IPv6 address has colons but no port.
+        Some((host, port)) if !host.contains(':') => (host, port.parse().ok()),
+        _ => (authority, None),
+    }
+}
+
+/// The port a scheme uses when none is given.
+#[cfg(any(feature = "trace", feature = "metrics"))]
+pub(crate) fn default_port(scheme: &str) -> Option<u16> {
+    match scheme {
+        "http" | "ws" => Some(80),
+        "https" | "wss" => Some(443),
+        _ => None,
+    }
+}
+
+/// The address and port a server was reached on: `X-Forwarded-Host`, else
+/// `Host`, with the scheme's default port when the header has none.
+#[cfg(any(feature = "trace", feature = "metrics"))]
+pub(crate) fn server_address<B>(request: &Request<B>) -> (&str, Option<u16>) {
+    let (address, port) = split_host_port(host(request.headers()));
+    (address, port.or_else(|| default_port(scheme(request))))
+}
+
+/// The server an outgoing request goes to: the URI's authority, else the
+/// `Host` header, with the scheme's default port when neither gives one.
+#[cfg(any(feature = "trace", feature = "metrics"))]
+pub(crate) fn target<B>(request: &Request<B>) -> (&str, Option<u16>) {
+    let uri = request.uri();
+    let (address, port) = split_host_port(
+        uri.authority()
+            .map_or_else(
+                || header(request.headers(), &HOST),
+                http::uri::Authority::as_str,
+            )
+            .rsplit('@')
+            .next()
+            .unwrap_or_default(),
+    );
+    (
+        address,
+        port.or_else(|| default_port(uri.scheme_str().unwrap_or("http"))),
+    )
+}
+
+/// Query parameters whose values are credentials: AWS and Google signed
+/// URLs, and Azure SAS tokens. `url.full` records them as `REDACTED`, as the
+/// conventions ask.
+#[cfg(feature = "trace")]
+const SENSITIVE_QUERY_KEYS: [&str; 4] = ["AWSAccessKeyId", "Signature", "sig", "X-Goog-Signature"];
+
+/// An outgoing request's full URL, for `url.full`: without credentials in
+/// the authority, and with signed-URL parameters redacted.
+#[cfg(feature = "trace")]
+pub(crate) fn full_url<B>(request: &Request<B>) -> String {
+    let uri = request.uri();
+    let authority = uri
+        .authority()
+        .map_or_else(
+            || header(request.headers(), &HOST),
+            http::uri::Authority::as_str,
+        )
+        .rsplit('@')
+        .next()
+        .unwrap_or_default();
+    let query = uri.query().map(|query| {
+        query
+            .split('&')
+            .map(|pair| match pair.split_once('=') {
+                Some((key, _)) if SENSITIVE_QUERY_KEYS.contains(&key) => {
+                    std::borrow::Cow::Owned(format!("{key}=REDACTED"))
+                }
+                _ => std::borrow::Cow::Borrowed(pair),
+            })
+            .collect::<Vec<_>>()
+            .join("&")
+    });
+    format!(
+        "{}://{authority}{}{}{}",
+        uri.scheme_str().unwrap_or("http"),
+        uri.path(),
+        if query.is_some() { "?" } else { "" },
+        query.unwrap_or_default(),
+    )
+}
+
 /// `X-Client-IP`, else the first `X-Forwarded-For` address.
 #[cfg(feature = "trace")]
 pub(crate) fn client_ip(headers: &HeaderMap) -> &str {
@@ -158,6 +257,72 @@ mod tests {
             .headers_mut()
             .insert(X_FORWARDED_PROTO, HeaderValue::from_static("https"));
         assert_eq!(scheme(&request), "https");
+    }
+
+    #[cfg(any(feature = "trace", feature = "metrics"))]
+    #[test]
+    fn hosts_split_from_ports() {
+        assert_eq!(split_host_port("api.example"), ("api.example", None));
+        assert_eq!(
+            split_host_port("api.example:8080"),
+            ("api.example", Some(8080))
+        );
+        assert_eq!(split_host_port("[::1]:8443"), ("::1", Some(8443)));
+        assert_eq!(split_host_port("[::1]"), ("::1", None));
+        assert_eq!(split_host_port("::1"), ("::1", None));
+        assert_eq!(split_host_port("api.example:http"), ("api.example", None));
+    }
+
+    #[cfg(any(feature = "trace", feature = "metrics"))]
+    #[test]
+    fn server_address_defaults_the_port_by_scheme() {
+        let request = |host: &'static str, proto: &'static str| {
+            Request::get("/")
+                .header(HOST, host)
+                .header(X_FORWARDED_PROTO, proto)
+                .body(())
+                .expect("static request")
+        };
+        assert_eq!(
+            server_address(&request("api.example", "https")),
+            ("api.example", Some(443))
+        );
+        assert_eq!(
+            server_address(&request("api.example:8080", "http")),
+            ("api.example", Some(8080))
+        );
+    }
+
+    #[cfg(any(feature = "trace", feature = "metrics"))]
+    #[test]
+    fn target_reads_the_uri_without_credentials() {
+        let request = |uri: &'static str| Request::get(uri).body(()).expect("static request");
+        assert_eq!(
+            target(&request("https://api.example/v1")),
+            ("api.example", Some(443))
+        );
+        assert_eq!(
+            target(&request("http://user:pw@10.0.0.1:9000/")),
+            ("10.0.0.1", Some(9000))
+        );
+        let relative = Request::get("/v1")
+            .header(HOST, "api.example")
+            .body(())
+            .expect("static request");
+        assert_eq!(target(&relative), ("api.example", Some(80)));
+    }
+
+    #[cfg(feature = "trace")]
+    #[test]
+    fn full_url_drops_credentials_and_redacts_signatures() {
+        let request =
+            Request::get("https://user:pw@bucket.example/key?X-Goog-Signature=abc&part=2")
+                .body(())
+                .expect("static request");
+        assert_eq!(
+            full_url(&request),
+            "https://bucket.example/key?X-Goog-Signature=REDACTED&part=2"
+        );
     }
 
     #[test]
