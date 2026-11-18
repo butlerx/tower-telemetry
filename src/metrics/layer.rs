@@ -5,14 +5,14 @@ use std::borrow::Cow;
 use std::task::{Context, Poll};
 use std::time::Instant;
 
-use ::metrics::{Label, SharedString};
+use ::metrics::Label;
 use http::{Request, Response};
 use http_body::Body;
 use tower_layer::Layer;
 use tower_service::Service;
 
-use super::MetricNames;
 use super::recording::{Active, MetricsBody, MetricsFuture, Pending, Side, describe};
+use super::{MetricNames, label};
 use crate::attribute::{
     HTTP_REQUEST_METHOD, HTTP_ROUTE, NETWORK_PROTOCOL_VERSION, SERVER_ADDRESS, SERVER_PORT,
     URL_SCHEME,
@@ -261,31 +261,34 @@ where
     fn call(&mut self, request: Request<ReqBody>) -> Self::Future {
         let HttpMetricsLayer { names, host_label } = self.layer;
         let method = Label::new(HTTP_REQUEST_METHOD, request::known_method(request.method()));
-        let scheme = Label::new(URL_SCHEME, scheme_label(request::scheme(&request)));
-        let host = host_label
-            .then(|| host_labels(request::server_address(&request)))
-            .into_iter()
-            .flatten()
-            .collect::<Vec<_>>();
+        let scheme = Label::new(URL_SCHEME, label::scheme(request::scheme(&request)));
+        // Empty, and so not allocated, unless the host label is on.
+        let host: Vec<Label> = if host_label {
+            host_labels(request::server_address(&request)).collect()
+        } else {
+            Vec::new()
+        };
         let active = Active::new(
             names.active_requests,
             [method.clone(), scheme.clone()]
                 .into_iter()
-                .chain(host.clone())
-                .collect::<Vec<_>>(),
+                .chain(host.iter().cloned())
+                .collect(),
         );
-        let labels = [
+        // Room for the outcome's two labels, so they don't reallocate.
+        let mut labels = Vec::with_capacity(LABEL_CAPACITY);
+        labels.extend([
             method,
             scheme,
             Label::new(
                 NETWORK_PROTOCOL_VERSION,
                 request::http_version(request.version()),
             ),
-        ]
-        .into_iter()
-        .chain(request::route(&request).map(|route| Label::new(HTTP_ROUTE, route.to_owned())))
-        .chain(host)
-        .collect();
+        ]);
+        labels.extend(
+            request::route(&request).map(|route| Label::new(HTTP_ROUTE, label::shared(route))),
+        );
+        labels.extend(host);
         let pending = Pending {
             names,
             side: Side::Server,
@@ -298,31 +301,15 @@ where
     }
 }
 
+/// Labels a request can have: up to six from the request, two from the
+/// outcome. [`MetricLabels`] reserve their own room.
+pub(super) const LABEL_CAPACITY: usize = 8;
+
 /// `server.address` and, when known, `server.port`.
 #[inline]
 pub(super) fn host_labels((address, port): (&str, Option<u16>)) -> impl Iterator<Item = Label> {
-    std::iter::once(Label::new(SERVER_ADDRESS, address.to_owned()))
-        .chain(port.map(|port| Label::new(SERVER_PORT, port_label(port))))
-}
-
-/// `server.port` without allocating for the default HTTP ports.
-#[inline]
-fn port_label(port: u16) -> SharedString {
-    match port {
-        80 => SharedString::const_str("80"),
-        443 => SharedString::const_str("443"),
-        other => SharedString::from(other.to_string()),
-    }
-}
-
-/// `url.scheme` without allocating for the usual two.
-#[inline]
-fn scheme_label(scheme: &str) -> SharedString {
-    match scheme {
-        "https" => SharedString::const_str("https"),
-        "http" => SharedString::const_str("http"),
-        other => SharedString::from(other.to_owned()),
-    }
+    std::iter::once(Label::new(SERVER_ADDRESS, label::shared(address)))
+        .chain(port.map(|port| Label::new(SERVER_PORT, label::port(port))))
 }
 
 #[cfg(test)]

@@ -132,25 +132,33 @@ pub(crate) fn full_url<B>(request: &Request<B>) -> String {
         .rsplit('@')
         .next()
         .unwrap_or_default();
-    let query = uri.query().map(|query| {
-        query
-            .split('&')
-            .map(|pair| match pair.split_once('=') {
+    let scheme = uri.scheme_str().unwrap_or("http");
+    let path = uri.path();
+    let query = uri.query();
+    // One allocation, sized for the URL as given.
+    let mut url = String::with_capacity(
+        scheme.len() + 3 + authority.len() + path.len() + query.map_or(0, |query| query.len() + 1),
+    );
+    url.push_str(scheme);
+    url.push_str("://");
+    url.push_str(authority);
+    url.push_str(path);
+    if let Some(query) = query {
+        url.push('?');
+        for (index, pair) in query.split('&').enumerate() {
+            if index > 0 {
+                url.push('&');
+            }
+            match pair.split_once('=') {
                 Some((key, _)) if SENSITIVE_QUERY_KEYS.contains(&key) => {
-                    std::borrow::Cow::Owned(format!("{key}=REDACTED"))
+                    url.push_str(key);
+                    url.push_str("=REDACTED");
                 }
-                _ => std::borrow::Cow::Borrowed(pair),
-            })
-            .collect::<Vec<_>>()
-            .join("&")
-    });
-    format!(
-        "{}://{authority}{}{}{}",
-        uri.scheme_str().unwrap_or("http"),
-        uri.path(),
-        if query.is_some() { "?" } else { "" },
-        query.unwrap_or_default(),
-    )
+                _ => url.push_str(pair),
+            }
+        }
+    }
+    url
 }
 
 /// `X-Client-IP`, else the first `X-Forwarded-For` address.

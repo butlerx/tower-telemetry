@@ -17,6 +17,7 @@ use opentelemetry_semantic_conventions::metric::{
 };
 
 mod client;
+pub(crate) mod label;
 mod layer;
 mod process;
 mod recording;

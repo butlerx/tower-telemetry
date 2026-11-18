@@ -282,7 +282,7 @@ where
                     span.record(HTTP_RESPONSE_BODY_SIZE, int(size));
                 }
                 span.record(TIME_TO_FIRST_BYTE, this.started.elapsed().as_secs_f64());
-                D::on_response(span, &span.context(), &mut response);
+                D::on_response(span, &mut response);
                 Poll::Ready(Ok(response))
             }
             Err(err) => {

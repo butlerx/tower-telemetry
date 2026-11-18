@@ -39,7 +39,7 @@ impl SpanDecorator for TenantDecorator {
         }
     }
 
-    fn on_response<B>(span: &Span, _context: &opentelemetry::Context, response: &mut Response<B>) {
+    fn on_response<B>(span: &Span, response: &mut Response<B>) {
         span.set_attribute("app.handled", true);
         mark_server_errors(span, response);
     }
