@@ -42,11 +42,6 @@ required-features = ["axum", "metrics", "trace"]
 name              = "hyper"
 required-features = ["metrics", "trace"]
 
-[[bench]]
-harness           = false
-name              = "layers"
-required-features = ["axum", "messaging", "metrics", "trace"]
-
 [[test]]
 name              = "trace"
 required-features = ["trace"]
@@ -58,6 +53,11 @@ required-features = ["metrics"]
 [[test]]
 name              = "messaging"
 required-features = ["messaging"]
+
+[[bench]]
+harness           = false
+name              = "layers"
+required-features = ["axum", "messaging", "metrics", "trace"]
 
 [dependencies]
 axum                               = { version = "0.8.9", default-features = false, features = ["matched-path"], optional = true }
