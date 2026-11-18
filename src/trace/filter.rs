@@ -153,6 +153,7 @@ impl RequestFilter for HealthcheckFilter {
 }
 
 /// Whether `user_agent` starts with one of [`HEALTHCHECK_USER_AGENTS`].
+#[inline]
 fn is_healthcheck_user_agent(user_agent: &str) -> bool {
     HEALTHCHECK_USER_AGENTS
         .iter()
@@ -161,6 +162,7 @@ fn is_healthcheck_user_agent(user_agent: &str) -> bool {
 
 /// Whether `path` is one of [`HEALTHCHECK_PATHS`], with or without a
 /// trailing slash.
+#[inline]
 fn is_healthcheck_path(path: &str) -> bool {
     let path = path
         .strip_suffix('/')

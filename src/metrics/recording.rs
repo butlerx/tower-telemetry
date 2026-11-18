@@ -31,6 +31,7 @@ impl Side {
     /// Whether a response with `status` failed: a `5xx` for a server, which
     /// isn't at fault for a client's `4xx`, and any `4xx` or `5xx` for a
     /// client, which didn't get what it asked for.
+    #[inline]
     fn is_error(self, status: StatusCode) -> bool {
         match self {
             Self::Server => status.is_server_error(),
@@ -83,6 +84,7 @@ impl Outcome {
     /// when the request failed: the status code for an error status (see
     /// [`Side::is_error`]), `_OTHER` when there's no response, as the
     /// conventions ask.
+    #[inline]
     fn labels(&self, side: Side) -> impl Iterator<Item = Label> {
         let (status, error) = match self {
             Self::Answered(status) => (

@@ -200,6 +200,7 @@ impl HttpMetricsLayer {
     /// Record under `names` instead of [`MetricNames::DEFAULT`], e.g. to match
     /// existing dashboards. See [`MetricNames`] for an example.
     #[must_use]
+    #[inline]
     pub const fn with_names(self, names: MetricNames) -> Self {
         Self { names, ..self }
     }
@@ -211,6 +212,7 @@ impl HttpMetricsLayer {
     /// proxy that restricts them to your own domains, or every made-up host
     /// is a new time series.
     #[must_use]
+    #[inline]
     pub const fn with_host_label(self, host_label: bool) -> Self {
         Self { host_label, ..self }
     }
@@ -297,12 +299,24 @@ where
 }
 
 /// `server.address` and, when known, `server.port`.
+#[inline]
 pub(super) fn host_labels((address, port): (&str, Option<u16>)) -> impl Iterator<Item = Label> {
     std::iter::once(Label::new(SERVER_ADDRESS, address.to_owned()))
-        .chain(port.map(|port| Label::new(SERVER_PORT, port.to_string())))
+        .chain(port.map(|port| Label::new(SERVER_PORT, port_label(port))))
+}
+
+/// `server.port` without allocating for the default HTTP ports.
+#[inline]
+fn port_label(port: u16) -> SharedString {
+    match port {
+        80 => SharedString::const_str("80"),
+        443 => SharedString::const_str("443"),
+        other => SharedString::from(other.to_string()),
+    }
 }
 
 /// `url.scheme` without allocating for the usual two.
+#[inline]
 fn scheme_label(scheme: &str) -> SharedString {
     match scheme {
         "https" => SharedString::const_str("https"),

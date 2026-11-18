@@ -35,6 +35,7 @@ pub(crate) fn route<B>(_request: &Request<B>) -> Option<&str> {
 }
 
 /// A header's value, trimmed; empty when missing or not visible ASCII.
+#[inline]
 pub(crate) fn header<'a>(headers: &'a HeaderMap, name: &HeaderName) -> &'a str {
     headers
         .get(name)
@@ -43,6 +44,7 @@ pub(crate) fn header<'a>(headers: &'a HeaderMap, name: &HeaderName) -> &'a str {
 }
 
 /// `X-Forwarded-Host`, else `Host`.
+#[inline]
 pub(crate) fn host(headers: &HeaderMap) -> &str {
     match header(headers, &X_FORWARDED_HOST) {
         "" => header(headers, &HOST),
@@ -54,6 +56,7 @@ pub(crate) fn host(headers: &HeaderMap) -> &str {
 /// it, into the host and port. IPv6 hosts lose their brackets, as
 /// `server.address` records them; a port that isn't a number is dropped.
 #[cfg(any(feature = "trace", feature = "metrics"))]
+#[inline]
 pub(crate) fn split_host_port(authority: &str) -> (&str, Option<u16>) {
     if let Some(bracketed) = authority.strip_prefix('[') {
         let (host, rest) = bracketed.split_once(']').unwrap_or((bracketed, ""));
@@ -71,6 +74,7 @@ pub(crate) fn split_host_port(authority: &str) -> (&str, Option<u16>) {
 
 /// The port a scheme uses when none is given.
 #[cfg(any(feature = "trace", feature = "metrics"))]
+#[inline]
 pub(crate) fn default_port(scheme: &str) -> Option<u16> {
     match scheme {
         "http" | "ws" => Some(80),
@@ -151,6 +155,7 @@ pub(crate) fn full_url<B>(request: &Request<B>) -> String {
 
 /// `X-Client-IP`, else the first `X-Forwarded-For` address.
 #[cfg(feature = "trace")]
+#[inline]
 pub(crate) fn client_ip(headers: &HeaderMap) -> &str {
     match header(headers, &X_CLIENT_IP) {
         "" => header(headers, &X_FORWARDED_FOR)
@@ -173,6 +178,7 @@ pub(crate) fn scheme<B>(request: &Request<B>) -> &str {
 
 /// The request's method as OpenTelemetry records it: `_OTHER` for methods
 /// outside RFC 9110 and PATCH, which would otherwise be unbounded.
+#[inline]
 pub(crate) fn known_method(method: &Method) -> &'static str {
     match *method {
         Method::GET => "GET",
@@ -189,12 +195,14 @@ pub(crate) fn known_method(method: &Method) -> &'static str {
 }
 
 /// The declared body size, from `Content-Length`.
+#[inline]
 pub(crate) fn content_length(headers: &HeaderMap) -> Option<u64> {
     header(headers, &CONTENT_LENGTH).parse().ok()
 }
 
 /// The protocol version as OpenTelemetry names it (`network.protocol.version`).
 #[cfg(any(feature = "trace", feature = "metrics"))]
+#[inline]
 pub(crate) fn http_version(version: http::Version) -> &'static str {
     match version {
         http::Version::HTTP_09 => "0.9",

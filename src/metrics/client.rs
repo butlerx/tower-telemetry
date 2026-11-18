@@ -82,6 +82,7 @@ impl Default for HttpClientMetricsLayer {
 impl HttpClientMetricsLayer {
     /// Record under `names` instead of [`MetricNames::CLIENT`].
     #[must_use]
+    #[inline]
     pub const fn with_names(self, names: MetricNames) -> Self {
         Self { names }
     }
