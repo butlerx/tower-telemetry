@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.2.0](https://github.com/butlerx/tower-telemetry/compare/v0.1.0...v0.2.0) (2026-11-18)
+
+
+### ⚠ BREAKING CHANGES
+
+* SpanDecorator::on_response no longer takes the span's context; call span.context() when needed
+
+### Features
+
+* HttpClientMetricsLayer, the OpenTelemetry http.client.* metrics ([1853920](https://github.com/butlerx/tower-telemetry/commit/18539208ffd83b8c80f69171a63360eb26fbcd9a))
+* OpenTelemetry messaging metrics and MessagingSpan::run ([#11](https://github.com/butlerx/tower-telemetry/issues/11)) ([66915e4](https://github.com/butlerx/tower-telemetry/commit/66915e41c1e92921d4290ba8633a9f887e38fb57))
+* OtelClientTraceLayer, one client span per outgoing request with the trace context sent along ([1853920](https://github.com/butlerx/tower-telemetry/commit/18539208ffd83b8c80f69171a63360eb26fbcd9a))
+* SpanDecorator::on_response no longer takes the span's context; call span.context() when needed ([fce2fd1](https://github.com/butlerx/tower-telemetry/commit/fce2fd142e1500527d9acd748f2dee6e6504d723))
+
+
+### Bug Fixes
+
+* leave HTTP server span status unset on success, and set error.type on 5xx ([fce2fd1](https://github.com/butlerx/tower-telemetry/commit/fce2fd142e1500527d9acd748f2dee6e6504d723))
+* server.address is the host without the port; server.port is recorded beside it ([1853920](https://github.com/butlerx/tower-telemetry/commit/18539208ffd83b8c80f69171a63360eb26fbcd9a))
+
+
+### Performance
+
+* cheaper metric labels: static for known values, shared for computed ones ([fce2fd1](https://github.com/butlerx/tower-telemetry/commit/fce2fd142e1500527d9acd748f2dee6e6504d723))
+* inline small hot-path helpers and builder methods ([#13](https://github.com/butlerx/tower-telemetry/issues/13)) ([1fecece](https://github.com/butlerx/tower-telemetry/commit/1fecece3154fa0911beacbc0183a1cfb1f1ee890))
+
 ## [0.1.0](https://github.com/butlerx/tower-telemetry/compare/v0.0.1...v0.1.0) (2026-11-17)
 
 
