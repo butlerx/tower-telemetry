@@ -2,11 +2,14 @@
 //! [axum] servers, and messaging for message producers and consumers.
 //!
 //! - [`OtelTraceLayer`] (feature `trace`): one server span per request,
-//!   continuing the caller's trace, with OpenTelemetry's HTTP fields. Spans
+//!   continuing the caller's trace, with OpenTelemetry's HTTP fields.
+//!   [`OtelClientTraceLayer`] does the same for requests a client sends, and
+//!   sends the trace context along. Spans
 //!   go through [`tracing`]; export them with `tracing-opentelemetry`.
 //! - [`HttpMetricsLayer`] (feature `metrics`): request count, duration, time
 //!   to first byte, body sizes and active requests through the [`metrics`]
 //!   facade; install any `metrics` exporter to ship them.
+//!   [`HttpClientMetricsLayer`] records the same for requests a client sends.
 //! - [`messaging`] (feature `messaging`): OpenTelemetry messaging spans for
 //!   any broker, trace context in message headers, and
 //!   [`messaging::MessageTraceLayer`] for consumers.
@@ -169,10 +172,11 @@ mod request;
 mod trace;
 
 #[cfg(feature = "metrics")]
-pub use metrics::{HttpMetricsLayer, MetricLabels, MetricNames};
+pub use metrics::{HttpClientMetricsLayer, HttpMetricsLayer, MetricLabels, MetricNames};
 #[cfg(feature = "trace")]
 pub use trace::{
-    DefaultSpanDecorator, HEALTHCHECK_PATHS, HEALTHCHECK_USER_AGENTS, HealthcheckFilter,
-    NoOpFilter, OtelTraceLayer, OtelTraceService, PropagatingSpanDecorator, RequestFilter,
-    ResponseFuture, SpanDecorator, mark_server_errors,
+    ClientResponseFuture, DefaultSpanDecorator, HEALTHCHECK_PATHS, HEALTHCHECK_USER_AGENTS,
+    HealthcheckFilter, NoOpFilter, OtelClientTraceLayer, OtelClientTraceService, OtelTraceLayer,
+    OtelTraceService, PropagatingSpanDecorator, RequestFilter, ResponseFuture, SpanDecorator,
+    mark_server_errors,
 };

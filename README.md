@@ -7,7 +7,8 @@
 
 OpenTelemetry spans and metrics as [Tower](https://docs.rs/tower) layers:
 
-- **HTTP**: one server span per request, plus request metrics, for [axum](https://docs.rs/axum) and plain [hyper](https://docs.rs/hyper).
+- **HTTP servers**: one server span per request, plus request metrics, for [axum](https://docs.rs/axum) and plain [hyper](https://docs.rs/hyper).
+- **HTTP clients**: one client span per outgoing request, with the trace context sent along, plus request metrics.
 - **Messaging**: spans for any broker (SQS, Kafka, NATS, ...), trace context carried in message headers, and a layer for consumers.
 
 Spans follow OpenTelemetry's [HTTP](https://opentelemetry.io/docs/specs/semconv/http/http-spans/) and [messaging](https://opentelemetry.io/docs/specs/semconv/messaging/messaging-spans/) conventions and go through [`tracing`](https://docs.rs/tracing). Export them with [`tracing-opentelemetry`](https://docs.rs/tracing-opentelemetry). Metrics go through the [`metrics`](https://docs.rs/metrics) facade. Install any exporter you like.
@@ -26,8 +27,8 @@ Needs Rust 1.88 or later.
 
 | Feature           | Default | Adds                                                                 |
 | ----------------- | ------- | -------------------------------------------------------------------- |
-| `trace`           | yes     | `OtelTraceLayer`: HTTP server spans                                  |
-| `metrics`         | yes     | `HttpMetricsLayer`, `install_panic_counter`                          |
+| `trace`           | yes     | `OtelTraceLayer` and `OtelClientTraceLayer`: HTTP server and client spans |
+| `metrics`         | yes     | `HttpMetricsLayer`, `HttpClientMetricsLayer`, `install_panic_counter` |
 | `axum`            | no      | Names spans and metrics by axum's matched route (`GET /users/{id}`)  |
 | `messaging`       | no      | `MessagingSpan`, `inject_context`/`extract_context`, `MessageTraceLayer` |
 | `runtime-metrics` | no      | `export_runtime_metrics`: Tokio runtime gauges, sampled every second |
@@ -142,7 +143,7 @@ Metrics use OpenTelemetry's HTTP server names, plus a request counter and time t
 
 The layer describes each metric's unit, so install your exporter before building the app. With Prometheus, use `PrometheusBuilder::new().with_recommended_naming(true)` to get the names above; without it the unit and `_total` suffixes are left off. DogStatsD sends the dotted names as they are.
 
-Labels are OpenTelemetry's: `http.request.method`, `url.scheme`, `network.protocol.version`, `http.route` (when a route matched), `http.response.status_code`, and `error.type` on `5xx` and failures. `server.address` is opt-in with `with_host_label(true)`. In Prometheus the dots become underscores (`http_request_method`). Add your own from a handler with `MetricLabels` in the response extensions. Keep their values few, since every distinct set is a new time series:
+Labels are OpenTelemetry's: `http.request.method`, `url.scheme`, `network.protocol.version`, `http.route` (when a route matched), `http.response.status_code`, and `error.type` on `5xx` and failures. `server.address` and `server.port` are opt-in with `with_host_label(true)`. In Prometheus the dots become underscores (`http_request_method`). Add your own from a handler with `MetricLabels` in the response extensions. Keep their values few, since every distinct set is a new time series:
 
 ```rust
 response
@@ -160,6 +161,24 @@ let layer = HttpMetricsLayer::default().with_names(MetricNames {
 ```
 
 This crate records but doesn't export: install any `metrics` exporter once per process. For exporters that take histogram buckets, `DURATION_BUCKETS` and `BODY_SIZE_BUCKETS` cover 1 ms to 5 minutes and 100 B to 10 GB.
+
+## HTTP clients
+
+Wrap the client you send requests with (a `hyper_util` `Client`, or any Tower service):
+
+```rust
+use tower::ServiceBuilder;
+use tower_telemetry::{HttpClientMetricsLayer, OtelClientTraceLayer};
+
+let client = ServiceBuilder::new()
+    .layer(HttpClientMetricsLayer::default())
+    .layer(OtelClientTraceLayer)
+    .service(client);
+```
+
+Each request gets a client span named by its method, a child of the current span. Its trace context goes into the request's headers through the global propagator, so the server continues the trace. `url.full` is recorded without credentials, and with signed-URL parameters (`Signature`, `sig`, `X-Goog-Signature`, `AWSAccessKeyId`) redacted. A `4xx` marks the span as an error, as the conventions ask for clients.
+
+The metrics are the server's six under `http.client.*` (`MetricNames::CLIENT`), labelled with `http.request.method`, `server.address`, `server.port`, `network.protocol.version`, `http.response.status_code` and `error.type` (on `4xx`, `5xx` and failures).
 
 ## Process metrics
 

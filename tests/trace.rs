@@ -93,3 +93,66 @@ async fn filters_requests_and_records_custom_attributes() {
         "time to first byte is recorded in seconds"
     );
 }
+
+#[tokio::test]
+async fn client_spans_propagate_and_mark_4xx_as_errors() {
+    use opentelemetry_sdk::propagation::TraceContextPropagator;
+    use tower_telemetry::OtelClientTraceLayer;
+
+    opentelemetry::global::set_text_map_propagator(TraceContextPropagator::new());
+    let exporter = InMemorySpanExporter::default();
+    let provider = SdkTracerProvider::builder()
+        .with_simple_exporter(exporter.clone())
+        .build();
+    let subscriber = tracing_subscriber::registry()
+        .with(tracing_opentelemetry::layer().with_tracer(provider.tracer("test")));
+    let _guard = tracing::subscriber::set_default(subscriber);
+
+    let client = ServiceBuilder::new()
+        .layer(OtelClientTraceLayer)
+        .service_fn(|request: Request<String>| async move {
+            assert!(
+                request.headers().contains_key("traceparent"),
+                "the trace context is sent"
+            );
+            let mut response = Response::new(String::new());
+            *response.status_mut() = http::StatusCode::NOT_FOUND;
+            Ok::<_, Infallible>(response)
+        });
+    client
+        .oneshot(
+            Request::get("https://user:pw@api.example:8443/users?sig=secret")
+                .body(String::new())
+                .expect("static request"),
+        )
+        .await
+        .expect("infallible");
+
+    provider.force_flush().expect("flush");
+    let spans = exporter.get_finished_spans().expect("spans");
+    assert_eq!(spans.len(), 1);
+    let span = &spans[0];
+    assert_eq!(span.name, "GET");
+    assert_eq!(span.span_kind, opentelemetry::trace::SpanKind::Client);
+    assert!(matches!(
+        span.status,
+        opentelemetry::trace::Status::Error { .. }
+    ));
+    let attribute = |key: &'static str| {
+        span.attributes
+            .iter()
+            .find(|kv| kv.key == Key::from_static_str(key))
+            .map(|kv| kv.value.clone())
+    };
+    assert_eq!(
+        attribute("url.full"),
+        Some(Value::from("https://api.example:8443/users?sig=REDACTED"))
+    );
+    assert_eq!(
+        attribute("server.address"),
+        Some(Value::from("api.example"))
+    );
+    assert_eq!(attribute("server.port"), Some(Value::I64(8443)));
+    assert_eq!(attribute(HTTP_RESPONSE_STATUS_CODE), Some(Value::I64(404)));
+    assert_eq!(attribute("error.type"), Some(Value::from("404")));
+}
