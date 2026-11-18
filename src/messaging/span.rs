@@ -1,10 +1,14 @@
 //! [`MessagingSpan`]: a messaging span's attributes, and starting it.
 
-use tracing::Span;
+use std::fmt::Display;
+use std::future::Future;
+
 use tracing::field::Empty;
+use tracing::{Instrument, Span};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use super::MessagingOperation;
+use super::metrics::Recorder;
 use crate::attribute::{
     ERROR_TYPE, EXCEPTION_MESSAGE, MESSAGING_BATCH_MESSAGE_COUNT, MESSAGING_CONSUMER_GROUP_NAME,
     MESSAGING_DESTINATION_NAME, MESSAGING_DESTINATION_TEMPLATE, MESSAGING_MESSAGE_BODY_SIZE,
@@ -191,6 +195,61 @@ impl<'a> MessagingSpan<'a> {
             Some(destination) => format!("{} {destination}", self.operation),
             None => self.operation.to_string(),
         }
+    }
+
+    /// Run one operation inside the span, and record how it went.
+    ///
+    /// `operation` gets the started span, to write its context into the
+    /// message's headers with [`inject_context`](super::inject_context)
+    /// before sending, or to record more attributes. The future it returns
+    /// runs inside the span. If it fails, the span is marked as an error with
+    /// the error's `Display` text, and the result is returned unchanged.
+    ///
+    /// With the `metrics` feature too, it records OpenTelemetry's messaging
+    /// metrics (see the [module docs](super#metrics)):
+    /// `messaging.client.operation.duration` for every operation but
+    /// `process`, and `messaging.client.sent.messages` for `send`, counting
+    /// the [`batch_message_count`](Self::batch_message_count), else 1.
+    ///
+    /// # Errors
+    ///
+    /// Whatever `operation`'s future fails with, unchanged.
+    ///
+    /// ```
+    /// use std::collections::HashMap;
+    /// use tower_telemetry::messaging::{MessagingOperation, MessagingSpan, inject_context};
+    /// # struct Client;
+    /// # impl Client {
+    /// #     async fn send_message(&self, _queue: &str, _attributes: HashMap<String, String>) -> Result<String, std::io::Error> { Ok("id".into()) }
+    /// # }
+    ///
+    /// async fn publish(client: &Client) -> Result<String, std::io::Error> {
+    ///     MessagingSpan::new("aws_sqs", MessagingOperation::Send)
+    ///         .destination("orders")
+    ///         .run(|span| {
+    ///             let mut attributes = HashMap::new();
+    ///             inject_context(span, &mut attributes);
+    ///             client.send_message("orders", attributes)
+    ///         })
+    ///         .await
+    /// }
+    /// ```
+    pub async fn run<F, Fut, T, E>(self, operation: F) -> Result<T, E>
+    where
+        F: FnOnce(&Span) -> Fut,
+        Fut: Future<Output = Result<T, E>>,
+        E: Display,
+    {
+        let metrics = Recorder::start(&self);
+        let span = self.start();
+        let result = operation(&span).instrument(span.clone()).await;
+        if let Err(err) = &result {
+            span.record(OTEL_STATUS_CODE, "ERROR");
+            span.record(ERROR_TYPE, "_OTHER");
+            span.record(EXCEPTION_MESSAGE, tracing::field::display(err));
+        }
+        metrics.finish(result.is_err());
+        result
     }
 
     /// Create the span, with every attribute set so far.

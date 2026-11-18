@@ -242,11 +242,38 @@
 //! span.set_attribute("messaging.kafka.message.key", "customer-42");
 //! ```
 //!
+//! # Metrics
+//!
+//! With the `metrics` feature as well as `messaging`, the crate records
+//! OpenTelemetry's messaging metrics through the [`metrics`](::metrics)
+//! facade:
+//!
+//! | Metric                                 | Type      | Unit    | Recorded by                                       |
+//! | -------------------------------------- | --------- | ------- | ------------------------------------------------- |
+//! | `messaging.process.duration`           | histogram | seconds | [`MessageTraceLayer`], per message                |
+//! | `messaging.client.consumed.messages`   | counter   | count   | [`MessageTraceLayer`], 1 per message              |
+//! | `messaging.client.operation.duration`  | histogram | seconds | [`MessagingSpan::run`], for `send`, `receive`, `settle` and `create` |
+//! | `messaging.client.sent.messages`       | counter   | count   | [`MessagingSpan::run`], for `send`: the batch count, else 1 |
+//!
+//! Labels are `messaging.system`, `messaging.operation.name`,
+//! `messaging.operation.type` (not on `process`), and when set,
+//! `messaging.destination.name`, `messaging.consumer.group.name`,
+//! `server.address` and `server.port`, plus `error.type` `_OTHER` when the
+//! operation failed. The destination label is the
+//! [`destination_template`](MessagingSpan::destination_template) when set:
+//! set one for per-request queues, so each isn't a new time series.
+//!
+//! Messages count as consumed when they reach your handler, so a `receive`
+//! through [`MessagingSpan::run`] records its duration but not its messages:
+//! counting them there too would count every message twice. Spans started
+//! with [`MessagingSpan::start`] record no metrics; use `run` for them.
+//!
 //! [`Injector`]: opentelemetry::propagation::Injector
 //! [`Extractor`]: opentelemetry::propagation::Extractor
 //! [messaging semantic conventions]: https://opentelemetry.io/docs/specs/semconv/messaging/messaging-spans/
 
 mod consumer;
+mod metrics;
 mod operation;
 mod propagation;
 mod span;

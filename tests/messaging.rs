@@ -96,3 +96,89 @@ async fn consumer_continues_the_producers_trace() {
         Some(Value::from("orders"))
     );
 }
+
+#[cfg(feature = "metrics")]
+#[tokio::test]
+async fn operations_and_processing_record_messaging_metrics() {
+    use metrics_util::debugging::{DebugValue, DebuggingRecorder};
+    use tower::{Service, ServiceBuilder, ServiceExt};
+    use tower_telemetry::messaging::{
+        Message, MessageTraceLayer, MessagingOperation, MessagingSpan,
+    };
+
+    struct Job;
+    impl Message for Job {
+        fn system(&self) -> &'static str {
+            "kafka"
+        }
+        fn destination(&self) -> Option<&str> {
+            Some("orders")
+        }
+    }
+
+    let recorder = DebuggingRecorder::new();
+    let snapshotter = recorder.snapshotter();
+    let _guard = metrics::set_default_local_recorder(&recorder);
+
+    let sent: Result<(), std::io::Error> = MessagingSpan::new("kafka", MessagingOperation::Send)
+        .destination("orders")
+        .batch_message_count(3)
+        .run(|_span| async { Err(std::io::Error::other("broker down")) })
+        .await;
+    assert!(sent.is_err(), "the error is returned unchanged");
+
+    let mut consumer = ServiceBuilder::new()
+        .layer(MessageTraceLayer)
+        .service_fn(|_job: Job| async { Ok::<_, std::io::Error>(()) });
+    consumer
+        .ready()
+        .await
+        .expect("ready")
+        .call(Job)
+        .await
+        .expect("handled");
+
+    let snapshot = snapshotter.snapshot().into_vec();
+    let find = |name: &str| {
+        snapshot
+            .iter()
+            .find(|(key, ..)| key.key().name() == name)
+            .unwrap_or_else(|| panic!("{name} was not recorded"))
+    };
+    let labels = |name: &str| -> Vec<(String, String)> {
+        find(name)
+            .0
+            .key()
+            .labels()
+            .map(|label| (label.key().to_owned(), label.value().to_owned()))
+            .collect()
+    };
+    let pair = |key: &str, value: &str| (key.to_owned(), value.to_owned());
+
+    assert_eq!(
+        find("messaging.client.sent.messages").3,
+        DebugValue::Counter(3)
+    );
+    assert_eq!(
+        labels("messaging.client.operation.duration"),
+        [
+            pair("messaging.system", "kafka"),
+            pair("messaging.operation.name", "send"),
+            pair("messaging.operation.type", "send"),
+            pair("messaging.destination.name", "orders"),
+            pair("error.type", "_OTHER"),
+        ]
+    );
+    assert_eq!(
+        find("messaging.client.consumed.messages").3,
+        DebugValue::Counter(1)
+    );
+    assert_eq!(
+        labels("messaging.process.duration"),
+        [
+            pair("messaging.system", "kafka"),
+            pair("messaging.operation.name", "process"),
+            pair("messaging.destination.name", "orders"),
+        ]
+    );
+}
