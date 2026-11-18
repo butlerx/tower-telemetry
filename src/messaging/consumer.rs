@@ -11,6 +11,7 @@ use tower_layer::Layer;
 use tower_service::Service;
 use tracing::Span;
 
+use super::metrics::Recorder;
 use super::{MessagingOperation, MessagingSpan};
 use crate::attribute::{ERROR_TYPE, EXCEPTION_MESSAGE, OTEL_STATUS_CODE};
 
@@ -65,6 +66,10 @@ pub trait Message {
 /// Wraps a consumer — a `Service` that handles one message — in a `process`
 /// span per message, parented on the producer's trace context, and marks
 /// the span as an error when the service fails.
+///
+/// With the `metrics` feature too, it records `messaging.process.duration`
+/// and `messaging.client.consumed.messages` for each message (see the
+/// [module docs](super#metrics)).
 ///
 /// ```
 /// use tower::ServiceBuilder;
@@ -129,10 +134,15 @@ where
             consumer_group: message.consumer_group(),
             parent,
             ..MessagingSpan::new(message.system(), MessagingOperation::Process)
-        }
-        .start();
+        };
+        let metrics = Recorder::start(&span);
+        let span = span.start();
         let inner = span.in_scope(|| self.inner.call(message));
-        MessageFuture { inner, span }
+        MessageFuture {
+            inner,
+            span,
+            metrics: Some(metrics),
+        }
     }
 }
 
@@ -142,13 +152,18 @@ pin_project_lite::pin_project! {
     ///
     /// When the consumer fails, it marks the span as an error, with the error's
     /// `Display` text as `exception.message`. The span ends when the future
-    /// completes or is dropped.
+    /// completes or is dropped. With the `metrics` feature, it records
+    /// `messaging.process.duration` and `messaging.client.consumed.messages`
+    /// when the consumer finishes; a future dropped before then records
+    /// nothing.
     pub struct MessageFuture<F> {
         // The consumer's future.
         #[pin]
         inner: F,
         // The message's `process` span.
         span: Span,
+        // Taken, and recorded, when the consumer finishes.
+        metrics: Option<Recorder>,
     }
 }
 
@@ -163,6 +178,9 @@ where
         let this = self.project();
         let _entered = this.span.enter();
         let result = ready!(this.inner.poll(cx));
+        if let Some(metrics) = this.metrics.take() {
+            metrics.finish(result.is_err());
+        }
         if let Err(err) = &result {
             this.span.record(OTEL_STATUS_CODE, "ERROR");
             this.span.record(ERROR_TYPE, "_OTHER");

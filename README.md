@@ -237,6 +237,19 @@ let consumer = ServiceBuilder::new()
 
 A span that covers a batch can link to each message's producer with `link_producers`. Pulling (`receive`) and acknowledging (`settle`) get their own spans from `MessagingSpan`.
 
+With the `metrics` feature too, `MessageTraceLayer` records `messaging.process.duration` and `messaging.client.consumed.messages`. For producers and pull consumers, `MessagingSpan::run` runs the operation inside the span, marks failures, and records `messaging.client.operation.duration` (plus `messaging.client.sent.messages` for `send`):
+
+```rust
+let id = MessagingSpan::new("aws_sqs", MessagingOperation::Send)
+    .destination("orders")
+    .run(|span| {
+        let mut headers = HashMap::new();
+        inject_context(span, &mut headers);
+        client.send_message("orders", body, headers)
+    })
+    .await?;
+```
+
 The [`messaging` docs](https://docs.rs/tower-telemetry/latest/tower_telemetry/messaging/) walk through producing, carrying context in your client's own header type, pull consumers with `receive` and `settle` spans, errors and extra attributes.
 
 ## Forwarding headers
