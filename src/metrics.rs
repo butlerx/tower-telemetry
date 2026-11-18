@@ -136,6 +136,7 @@ impl MetricNames {
     /// The two duration histograms, `duration` and `time_to_first_byte`: the
     /// names to give [`DURATION_BUCKETS`] when your exporter takes buckets.
     #[must_use]
+    #[inline]
     pub const fn durations(&self) -> [&'static str; 2] {
         [self.duration, self.time_to_first_byte]
     }
@@ -144,6 +145,7 @@ impl MetricNames {
     /// `response_body_size`: the names to give [`BODY_SIZE_BUCKETS`] when your
     /// exporter takes buckets.
     #[must_use]
+    #[inline]
     pub const fn body_sizes(&self) -> [&'static str; 2] {
         [self.request_body_size, self.response_body_size]
     }

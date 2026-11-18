@@ -33,6 +33,7 @@ impl MessagingOperation {
     /// The `messaging.operation.type` value: `create`, `send`, `receive`,
     /// `process` or `settle`. Also the first word of the span's name.
     #[must_use]
+    #[inline]
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Create => "create",
@@ -47,6 +48,7 @@ impl MessagingOperation {
     /// create and send, `consumer` for process, `client` for receive and
     /// settle.
     #[must_use]
+    #[inline]
     pub const fn span_kind(self) -> &'static str {
         match self {
             Self::Create | Self::Send => "producer",

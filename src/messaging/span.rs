@@ -63,6 +63,7 @@ impl<'a> MessagingSpan<'a> {
     /// (`aws_sqs`, `kafka`, `rabbitmq`, `gcp_pubsub`, ...; see the
     /// [module docs](super#messagingsystem)). Set what else the client knows with
     /// the other methods, then call [`start`](Self::start).
+    #[inline]
     pub const fn new(system: &'a str, operation: MessagingOperation) -> Self {
         Self {
             system,
@@ -84,6 +85,7 @@ impl<'a> MessagingSpan<'a> {
     /// The client's own name for the operation (`messaging.operation.name`):
     /// `SendMessage`, `publish`, `ack`, `DeleteMessage`. Without it, the
     /// operation type (`send`, `settle`, ...) is used.
+    #[inline]
     pub fn operation_name(self, name: &'a str) -> Self {
         Self {
             operation_name: Some(name),
@@ -94,6 +96,7 @@ impl<'a> MessagingSpan<'a> {
     /// The queue, topic or subject (`messaging.destination.name`), e.g. `orders`.
     /// Names the span: `send orders`. For a destination with identifiers in its
     /// name, also set [`destination_template`](Self::destination_template).
+    #[inline]
     pub fn destination(self, name: &'a str) -> Self {
         Self {
             destination: Some(name),
@@ -105,6 +108,7 @@ impl<'a> MessagingSpan<'a> {
     /// (`messaging.destination.template`), e.g. `replies.{client}` for
     /// `replies.4f2a`. When set, it names the span instead of the destination,
     /// so temporary or per-tenant queues don't make every span name unique.
+    #[inline]
     pub fn destination_template(self, template: &'a str) -> Self {
         Self {
             destination_template: Some(template),
@@ -116,6 +120,7 @@ impl<'a> MessagingSpan<'a> {
     /// spans about one message; for a `send` span, the id is often only known
     /// after sending: record it then with
     /// `span.record("messaging.message.id", id)`.
+    #[inline]
     pub fn message_id(self, id: &'a str) -> Self {
         Self {
             message_id: Some(id),
@@ -126,6 +131,7 @@ impl<'a> MessagingSpan<'a> {
     /// The id that ties related messages together
     /// (`messaging.message.conversation_id`), such as a correlation id for
     /// request and reply.
+    #[inline]
     pub fn conversation_id(self, id: &'a str) -> Self {
         Self {
             conversation_id: Some(id),
@@ -135,6 +141,7 @@ impl<'a> MessagingSpan<'a> {
 
     /// The message body's size in bytes (`messaging.message.body.size`), for
     /// spans about one message.
+    #[inline]
     pub fn body_size(self, bytes: u64) -> Self {
         Self {
             body_size: Some(bytes),
@@ -147,6 +154,7 @@ impl<'a> MessagingSpan<'a> {
     /// known after the pull: record it then, as an `i64` (`tracing-opentelemetry`
     /// exports a `u64` as a string), with
     /// `span.record("messaging.batch.message_count", count as i64)`.
+    #[inline]
     pub fn batch_message_count(self, count: u64) -> Self {
         Self {
             batch_message_count: Some(count),
@@ -157,6 +165,7 @@ impl<'a> MessagingSpan<'a> {
     /// The consumer group, subscription or queue group reading the message
     /// (`messaging.consumer.group.name`). For `receive`, `process` and `settle`
     /// spans.
+    #[inline]
     pub fn consumer_group(self, name: &'a str) -> Self {
         Self {
             consumer_group: Some(name),
@@ -166,6 +175,7 @@ impl<'a> MessagingSpan<'a> {
 
     /// The broker's address (`server.address`), such as a hostname or queue URL
     /// host, and port (`server.port`) when it isn't the protocol's default.
+    #[inline]
     pub fn server(self, address: &'a str, port: Option<u16>) -> Self {
         Self {
             server_address: Some(address),
@@ -179,6 +189,7 @@ impl<'a> MessagingSpan<'a> {
     /// Use it with [`extract_context`](super::extract_context) to continue a
     /// producer's trace by hand. A context with no valid span (a message without
     /// trace headers) makes the span the root of a new trace.
+    #[inline]
     pub fn parent(self, context: opentelemetry::Context) -> Self {
         Self {
             parent: Some(context),
