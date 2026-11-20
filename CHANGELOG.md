@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/butlerx/tower-telemetry/compare/v0.2.0...v0.2.1) (2026-11-20)
+
+
+### Bug Fixes
+
+* bound url.scheme and redact credentials in url.query ([#15](https://github.com/butlerx/tower-telemetry/issues/15)) ([da7d752](https://github.com/butlerx/tower-telemetry/commit/da7d752f40dcffaf8b79bdaab4a0bb8b4f72a076))
+
 ## [0.2.0](https://github.com/butlerx/tower-telemetry/compare/v0.1.0...v0.2.0) (2026-11-18)
 
 
