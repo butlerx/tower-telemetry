@@ -8,7 +8,8 @@ use opentelemetry::trace::TracerProvider as _;
 use opentelemetry::{Key, Value};
 use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider};
 use opentelemetry_semantic_conventions::attribute::{
-    HTTP_REQUEST_METHOD, HTTP_RESPONSE_STATUS_CODE, URL_FULL, URL_PATH, URL_QUERY, URL_SCHEME,
+    HTTP_REQUEST_METHOD, HTTP_RESPONSE_STATUS_CODE, SERVER_PORT, URL_FULL, URL_PATH, URL_QUERY,
+    URL_SCHEME,
 };
 use tower::{ServiceBuilder, ServiceExt};
 use tower_telemetry::{OtelTraceLayer, RequestFilter, SpanDecorator, mark_server_errors};
@@ -290,4 +291,49 @@ async fn client_spans_redact_the_configured_query_keys() {
         )),
         "configured names extend the built-in list, matched without case"
     );
+}
+
+#[tokio::test]
+async fn websocket_schemes_keep_the_default_port() {
+    let exporter = InMemorySpanExporter::default();
+    let provider = SdkTracerProvider::builder()
+        .with_simple_exporter(exporter.clone())
+        .build();
+    let subscriber = tracing_subscriber::registry()
+        .with(tracing_opentelemetry::layer().with_tracer(provider.tracer("test")));
+    let _guard = tracing::subscriber::set_default(subscriber);
+
+    let service = ServiceBuilder::new()
+        .layer(<OtelTraceLayer>::default())
+        .service_fn(|_request: Request<()>| async {
+            Ok::<_, Infallible>(Response::new(String::new()))
+        });
+    for proto in ["wss", "ws"] {
+        service
+            .clone()
+            .oneshot(
+                Request::get("/socket")
+                    .header(http::header::HOST, "api.example")
+                    .header("x-forwarded-proto", proto)
+                    .body(())
+                    .expect("static request"),
+            )
+            .await
+            .expect("infallible");
+    }
+
+    provider.force_flush().expect("flush");
+    let spans = exporter.get_finished_spans().expect("spans");
+    assert_eq!(spans.len(), 2);
+    let attribute = |span: usize, key: &'static str| {
+        spans[span]
+            .attributes
+            .iter()
+            .find(|attribute| attribute.key == Key::from_static_str(key))
+            .map(|attribute| attribute.value.clone())
+    };
+    assert_eq!(attribute(0, URL_SCHEME), Some(Value::from("wss")));
+    assert_eq!(attribute(0, SERVER_PORT), Some(Value::I64(443)));
+    assert_eq!(attribute(1, URL_SCHEME), Some(Value::from("ws")));
+    assert_eq!(attribute(1, SERVER_PORT), Some(Value::I64(80)));
 }

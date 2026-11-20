@@ -79,10 +79,12 @@ pub(crate) fn split_host_port(authority: &str) -> (&str, Option<u16>) {
 #[cfg(any(feature = "trace", feature = "metrics"))]
 #[inline]
 pub(crate) fn default_port(scheme: &str) -> Option<u16> {
-    match scheme {
-        "http" | "ws" => Some(80),
-        "https" | "wss" => Some(443),
-        _ => None,
+    if scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("ws") {
+        Some(80)
+    } else if scheme.eq_ignore_ascii_case("https") || scheme.eq_ignore_ascii_case("wss") {
+        Some(443)
+    } else {
+        None
     }
 }
 
@@ -235,21 +237,34 @@ pub(crate) fn client_ip(headers: &HeaderMap) -> &str {
     }
 }
 
-/// `url.scheme`: `X-Forwarded-Proto`, else the request's own scheme, else
-/// `http`. Only `http` and `https` are kept. The value can come from the
-/// client, and each distinct value would be a new series, so anything else
-/// is `_OTHER`, as [`known_method`] does for methods.
+/// The request's scheme as it arrived: `X-Forwarded-Proto`, else the
+/// request's own scheme, else `http`. Used to infer the port; the value
+/// isn't recorded as is, see [`url_scheme`].
 #[cfg(any(feature = "trace", feature = "metrics"))]
 #[inline]
-pub(crate) fn scheme<B>(request: &Request<B>) -> &'static str {
-    let scheme = match header(request.headers(), &X_FORWARDED_PROTO) {
+pub(crate) fn scheme<B>(request: &Request<B>) -> &str {
+    match header(request.headers(), &X_FORWARDED_PROTO) {
         "" => request.uri().scheme_str().unwrap_or("http"),
         forwarded => forwarded,
-    };
+    }
+}
+
+/// `url.scheme`: [`scheme`], bounded to `http`, `https`, `ws` or `wss`, and
+/// `_OTHER` for anything else. The value can come from the client, and each
+/// distinct value would be a new series, so the set is fixed, as
+/// [`known_method`] does for methods.
+#[cfg(any(feature = "trace", feature = "metrics"))]
+#[inline]
+pub(crate) fn url_scheme<B>(request: &Request<B>) -> &'static str {
+    let scheme = scheme(request);
     if scheme.eq_ignore_ascii_case("https") {
         "https"
     } else if scheme.eq_ignore_ascii_case("http") {
         "http"
+    } else if scheme.eq_ignore_ascii_case("wss") {
+        "wss"
+    } else if scheme.eq_ignore_ascii_case("ws") {
+        "ws"
     } else {
         "_OTHER"
     }
@@ -401,7 +416,7 @@ mod tests {
 
     #[cfg(any(feature = "trace", feature = "metrics"))]
     #[test]
-    fn scheme_is_bounded_to_http_https_or_other() {
+    fn scheme_is_bounded_to_known_schemes_or_other() {
         let forwarded = |proto: &'static str| {
             let mut request = Request::get("/").body(()).expect("static request");
             request
@@ -409,18 +424,42 @@ mod tests {
                 .insert(X_FORWARDED_PROTO, HeaderValue::from_static(proto));
             request
         };
-        assert_eq!(scheme(&forwarded("HTTPS")), "https");
-        assert_eq!(scheme(&forwarded("javascript")), "_OTHER");
-        assert_eq!(scheme(&forwarded("x-1")), "_OTHER");
+        assert_eq!(url_scheme(&forwarded("HTTPS")), "https");
+        assert_eq!(url_scheme(&forwarded("WSS")), "wss");
+        assert_eq!(url_scheme(&forwarded("ws")), "ws");
+        assert_eq!(url_scheme(&forwarded("javascript")), "_OTHER");
+        assert_eq!(url_scheme(&forwarded("x-1")), "_OTHER");
 
         let absolute = Request::get("x-1://host/a")
             .body(())
             .expect("static request");
-        assert_eq!(scheme(&absolute), "_OTHER");
+        assert_eq!(url_scheme(&absolute), "_OTHER");
         let secure = Request::get("https://host/a")
             .body(())
             .expect("static request");
-        assert_eq!(scheme(&secure), "https");
+        assert_eq!(url_scheme(&secure), "https");
+    }
+
+    #[cfg(any(feature = "trace", feature = "metrics"))]
+    #[test]
+    fn websocket_schemes_keep_their_default_ports() {
+        let forwarded = |proto: &'static str| {
+            Request::get("/")
+                .header(HOST, "api.example")
+                .header(X_FORWARDED_PROTO, proto)
+                .body(())
+                .expect("static request")
+        };
+        assert_eq!(
+            server_address(&forwarded("wss")),
+            ("api.example", Some(443))
+        );
+        assert_eq!(server_address(&forwarded("ws")), ("api.example", Some(80)));
+        assert_eq!(
+            server_address(&forwarded("WSS")),
+            ("api.example", Some(443))
+        );
+        assert_eq!(server_address(&forwarded("x-1")), ("api.example", None));
     }
 
     #[cfg(feature = "trace")]

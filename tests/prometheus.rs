@@ -44,7 +44,32 @@ async fn prometheus_names_follow_recommended_naming() {
         .await
         .expect("infallible");
 
+    // Behind a TLS-terminating proxy, `wss` keeps its default port.
+    let service = ServiceBuilder::new()
+        .layer(HttpMetricsLayer::default().with_host_label(true))
+        .service_fn(|_request: Request<()>| async {
+            Ok::<_, Infallible>(Response::new(Full::new(Bytes::new())))
+        });
+    service
+        .oneshot(
+            Request::get("/socket")
+                .header(http::header::HOST, "api.example")
+                .header("x-forwarded-proto", "wss")
+                .body(())
+                .expect("static request"),
+        )
+        .await
+        .expect("infallible");
+
     let rendered = handle.render();
+    assert!(
+        rendered.lines().any(|line| {
+            line.starts_with("http_server_requests_total{")
+                && line.contains(r#"url_scheme="wss""#)
+                && line.contains(r#"server_port="443""#)
+        }),
+        "wss keeps the default port in:\n{rendered}"
+    );
     assert!(
         rendered.contains(r#"url_scheme="_OTHER""#),
         "unknown schemes are bounded in:\n{rendered}"

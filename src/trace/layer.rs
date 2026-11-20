@@ -77,7 +77,7 @@ use crate::request;
 /// | `http.route`                                     | axum's matched route (feature `axum`)    |
 /// | `url.path`                                       | the URI                                  |
 /// | `url.query`                                      | the URI, with credential values redacted (see below) |
-/// | `url.scheme`                                     | `http` or `https`: `X-Forwarded-Proto`, else the URI, else `http`; `_OTHER` for any other |
+/// | `url.scheme`                                     | `http`, `https`, `ws` or `wss`: `X-Forwarded-Proto`, else the URI, else `http`; `_OTHER` for any other |
 /// | `server.address`, `server.port`                  | `X-Forwarded-Host`, else `Host`; the port defaults by scheme |
 /// | `client.address`                                 | `X-Client-IP`, else the first `X-Forwarded-For` |
 /// | `network.protocol.version`                       | the HTTP version                         |
@@ -321,7 +321,7 @@ fn make_span<B, D: SpanDecorator>(request: &Request<B>) -> Span {
         { HTTP_ROUTE } = request::route(request),
         { URL_PATH } = request.uri().path(),
         { URL_QUERY } = request::query(request, D::SENSITIVE_QUERY_KEYS).as_deref(),
-        { URL_SCHEME } = request::scheme(request),
+        { URL_SCHEME } = request::url_scheme(request),
         { NETWORK_PROTOCOL_NAME } = "http",
         { NETWORK_PROTOCOL_VERSION } = request::http_version(request.version()),
         { SERVER_ADDRESS } = address,
