@@ -106,7 +106,7 @@ pub struct MetricLabels(
 /// | Label                       | Value                                                     | On                 |
 /// | --------------------------- | --------------------------------------------------------- | ------------------ |
 /// | `http.request.method`       | the method; `_OTHER` for non-standard ones                | all                |
-/// | `url.scheme`                | `X-Forwarded-Proto`, else the URI, else `http`            | all                |
+/// | `url.scheme`                | `http` or `https`: `X-Forwarded-Proto`, else the URI, else `http`; `_OTHER` for any other | all |
 /// | `network.protocol.version`  | `1.1`, `2`, ...                                           | all but active     |
 /// | `http.route`                | axum's matched route (feature `axum`); left off when none | all but active     |
 /// | `http.response.status_code` | the response status; left off when the service failed     | all but active     |
@@ -261,7 +261,7 @@ where
     fn call(&mut self, request: Request<ReqBody>) -> Self::Future {
         let HttpMetricsLayer { names, host_label } = self.layer;
         let method = Label::new(HTTP_REQUEST_METHOD, request::known_method(request.method()));
-        let scheme = Label::new(URL_SCHEME, label::scheme(request::scheme(&request)));
+        let scheme = Label::new(URL_SCHEME, request::scheme(&request));
         // Empty, and so not allocated, unless the host label is on.
         let host: Vec<Label> = if host_label {
             host_labels(request::server_address(&request)).collect()

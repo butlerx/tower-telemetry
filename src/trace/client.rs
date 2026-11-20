@@ -54,7 +54,7 @@ use crate::request;
 /// | --------------------------------- | ------------------------------------------------- |
 /// | `http.request.method`             | the method; `_OTHER` for non-standard ones        |
 /// | `server.address`, `server.port`   | the URI, else `Host`; the port defaults by scheme |
-/// | `url.full`                        | the URI, without credentials and with signed-URL parameters redacted |
+/// | `url.full`                        | the URI, without credentials and with credential query values redacted (see [`OtelTraceLayer`](crate::OtelTraceLayer)) |
 /// | `user_agent.original`             | `User-Agent`                                      |
 /// | `http.request.body.size`          | the body's exact size, else `Content-Length`      |
 /// | `http.response.status_code`       | the response                                      |

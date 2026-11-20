@@ -8,7 +8,7 @@ use opentelemetry::trace::TracerProvider as _;
 use opentelemetry::{Key, Value};
 use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider};
 use opentelemetry_semantic_conventions::attribute::{
-    HTTP_REQUEST_METHOD, HTTP_RESPONSE_STATUS_CODE, URL_PATH,
+    HTTP_REQUEST_METHOD, HTTP_RESPONSE_STATUS_CODE, URL_PATH, URL_QUERY, URL_SCHEME,
 };
 use tower::{ServiceBuilder, ServiceExt};
 use tower_telemetry::{OtelTraceLayer, RequestFilter, SpanDecorator, mark_server_errors};
@@ -155,4 +155,49 @@ async fn client_spans_propagate_and_mark_4xx_as_errors() {
     assert_eq!(attribute("server.port"), Some(Value::I64(8443)));
     assert_eq!(attribute(HTTP_RESPONSE_STATUS_CODE), Some(Value::I64(404)));
     assert_eq!(attribute("error.type"), Some(Value::from("404")));
+}
+
+#[tokio::test]
+async fn server_spans_redact_credentials_and_bound_the_scheme() {
+    let exporter = InMemorySpanExporter::default();
+    let provider = SdkTracerProvider::builder()
+        .with_simple_exporter(exporter.clone())
+        .build();
+    let subscriber = tracing_subscriber::registry()
+        .with(tracing_opentelemetry::layer().with_tracer(provider.tracer("test")));
+    let _guard = tracing::subscriber::set_default(subscriber);
+
+    let service = ServiceBuilder::new()
+        .layer(<OtelTraceLayer>::default())
+        .service_fn(|_request: Request<()>| async {
+            Ok::<_, Infallible>(Response::new(String::new()))
+        });
+    for request in [
+        Request::get("/files?access_token=secret&page=2").body(()),
+        Request::get("x-1://host/a").body(()),
+    ] {
+        service
+            .clone()
+            .oneshot(request.expect("static request"))
+            .await
+            .expect("infallible");
+    }
+
+    provider.force_flush().expect("flush");
+    let spans = exporter.get_finished_spans().expect("spans");
+    assert_eq!(spans.len(), 2);
+    let attribute = |span: usize, key: &'static str| {
+        spans[span]
+            .attributes
+            .iter()
+            .find(|attribute| attribute.key == Key::from_static_str(key))
+            .map(|attribute| attribute.value.clone())
+    };
+    assert_eq!(
+        attribute(0, URL_QUERY),
+        Some(Value::from("access_token=REDACTED&page=2"))
+    );
+    assert_eq!(attribute(0, URL_SCHEME), Some(Value::from("http")));
+    assert_eq!(attribute(1, URL_SCHEME), Some(Value::from("_OTHER")));
+    assert_eq!(attribute(1, URL_QUERY), None);
 }
