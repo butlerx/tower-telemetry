@@ -91,6 +91,27 @@ use crate::request;
 ///
 /// [`OpenTelemetrySpanExt::set_attribute`]: tracing_opentelemetry::OpenTelemetrySpanExt::set_attribute
 pub trait SpanDecorator {
+    /// Query parameter names whose values `url.query` redacts, on top of the
+    /// built-in list: signed-URL parameters and common token names. The
+    /// built-in names always apply; this only adds to them. Names match
+    /// without regard to case, and the default is empty.
+    ///
+    /// ```
+    /// use tower_telemetry::{OtelTraceLayer, SpanDecorator};
+    ///
+    /// #[derive(Debug, Clone, Copy, Default)]
+    /// struct ApiKeyDecorator;
+    ///
+    /// impl SpanDecorator for ApiKeyDecorator {
+    ///     const SENSITIVE_QUERY_KEYS: &'static [&'static str] = &["x-api-key"];
+    /// }
+    ///
+    /// // `?x-api-key=...` now appears as `x-api-key=REDACTED` on the span.
+    /// let layer = OtelTraceLayer::<ApiKeyDecorator>::default();
+    /// # let _ = layer;
+    /// ```
+    const SENSITIVE_QUERY_KEYS: &'static [&'static str] = &[];
+
     /// The span's name (`otel.name`): `"{method} {route}"` when a route
     /// matched, else `"{method}"`, which allocates nothing. Never the raw
     /// path, which carries identifiers and would make every span name unique.

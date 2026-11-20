@@ -177,6 +177,6 @@ pub use metrics::{HttpClientMetricsLayer, HttpMetricsLayer, MetricLabels, Metric
 pub use trace::{
     ClientResponseFuture, DefaultSpanDecorator, HEALTHCHECK_PATHS, HEALTHCHECK_USER_AGENTS,
     HealthcheckFilter, NoOpFilter, OtelClientTraceLayer, OtelClientTraceService, OtelTraceLayer,
-    OtelTraceService, PropagatingSpanDecorator, RequestFilter, ResponseFuture, SpanDecorator,
-    mark_server_errors,
+    OtelTraceService, PropagatingSpanDecorator, RedactingClientTraceLayer, RequestFilter,
+    ResponseFuture, SpanDecorator, mark_server_errors,
 };

@@ -8,7 +8,7 @@ use opentelemetry::trace::TracerProvider as _;
 use opentelemetry::{Key, Value};
 use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider};
 use opentelemetry_semantic_conventions::attribute::{
-    HTTP_REQUEST_METHOD, HTTP_RESPONSE_STATUS_CODE, URL_PATH, URL_QUERY, URL_SCHEME,
+    HTTP_REQUEST_METHOD, HTTP_RESPONSE_STATUS_CODE, URL_FULL, URL_PATH, URL_QUERY, URL_SCHEME,
 };
 use tower::{ServiceBuilder, ServiceExt};
 use tower_telemetry::{OtelTraceLayer, RequestFilter, SpanDecorator, mark_server_errors};
@@ -200,4 +200,94 @@ async fn server_spans_redact_credentials_and_bound_the_scheme() {
     assert_eq!(attribute(0, URL_SCHEME), Some(Value::from("http")));
     assert_eq!(attribute(1, URL_SCHEME), Some(Value::from("_OTHER")));
     assert_eq!(attribute(1, URL_QUERY), None);
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct ApiKeyDecorator;
+
+impl SpanDecorator for ApiKeyDecorator {
+    const SENSITIVE_QUERY_KEYS: &'static [&'static str] = &["X-Api-Key"];
+}
+
+#[tokio::test]
+async fn server_spans_redact_the_decorators_query_keys() {
+    let exporter = InMemorySpanExporter::default();
+    let provider = SdkTracerProvider::builder()
+        .with_simple_exporter(exporter.clone())
+        .build();
+    let subscriber = tracing_subscriber::registry()
+        .with(tracing_opentelemetry::layer().with_tracer(provider.tracer("test")));
+    let _guard = tracing::subscriber::set_default(subscriber);
+
+    let service = ServiceBuilder::new()
+        .layer(OtelTraceLayer::<ApiKeyDecorator>::default())
+        .service_fn(|_request: Request<()>| async {
+            Ok::<_, Infallible>(Response::new(String::new()))
+        });
+    service
+        .oneshot(
+            Request::get("/files?x-api-key=abc&access_token=def&page=2")
+                .body(())
+                .expect("static request"),
+        )
+        .await
+        .expect("infallible");
+
+    provider.force_flush().expect("flush");
+    let spans = exporter.get_finished_spans().expect("spans");
+    let query = spans[0]
+        .attributes
+        .iter()
+        .find(|attribute| attribute.key == Key::from_static_str(URL_QUERY))
+        .map(|attribute| attribute.value.clone());
+    assert_eq!(
+        query,
+        Some(Value::from(
+            "x-api-key=REDACTED&access_token=REDACTED&page=2"
+        ))
+    );
+}
+
+#[tokio::test]
+async fn client_spans_redact_the_configured_query_keys() {
+    use tower_telemetry::OtelClientTraceLayer;
+
+    let exporter = InMemorySpanExporter::default();
+    let provider = SdkTracerProvider::builder()
+        .with_simple_exporter(exporter.clone())
+        .build();
+    let subscriber = tracing_subscriber::registry()
+        .with(tracing_opentelemetry::layer().with_tracer(provider.tracer("test")));
+    let _guard = tracing::subscriber::set_default(subscriber);
+
+    let client = ServiceBuilder::new()
+        .layer(OtelClientTraceLayer::with_redacted_query_keys(&[
+            "x-api-key",
+        ]))
+        .service_fn(|_request: Request<String>| async {
+            Ok::<_, Infallible>(Response::new(String::new()))
+        });
+    client
+        .oneshot(
+            Request::get("https://api.example/v1?X-API-KEY=abc&token=def&page=2")
+                .body(String::new())
+                .expect("static request"),
+        )
+        .await
+        .expect("infallible");
+
+    provider.force_flush().expect("flush");
+    let spans = exporter.get_finished_spans().expect("spans");
+    let url = spans[0]
+        .attributes
+        .iter()
+        .find(|attribute| attribute.key == Key::from_static_str(URL_FULL))
+        .map(|attribute| attribute.value.clone());
+    assert_eq!(
+        url,
+        Some(Value::from(
+            "https://api.example/v1?X-API-KEY=REDACTED&token=REDACTED&page=2"
+        )),
+        "configured names extend the built-in list, matched without case"
+    );
 }

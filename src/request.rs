@@ -135,21 +135,29 @@ const SENSITIVE_QUERY_KEYS: [&str; 13] = [
     "client_secret",
 ];
 
+/// Whether a query parameter's name is a credential: one of the built-in
+/// names, or one of `extra`.
+#[cfg(feature = "trace")]
+fn is_sensitive_key(key: &str, extra: &[&str]) -> bool {
+    SENSITIVE_QUERY_KEYS
+        .iter()
+        .chain(extra)
+        .any(|sensitive| key.eq_ignore_ascii_case(sensitive))
+}
+
 /// Whether one `key=value` pair of a query carries a credential.
 #[cfg(feature = "trace")]
-fn is_sensitive_pair(pair: &str) -> bool {
-    pair.split_once('=').is_some_and(|(key, _)| {
-        SENSITIVE_QUERY_KEYS
-            .iter()
-            .any(|sensitive| key.eq_ignore_ascii_case(sensitive))
-    })
+fn is_sensitive_pair(pair: &str, extra: &[&str]) -> bool {
+    pair.split_once('=')
+        .is_some_and(|(key, _)| is_sensitive_key(key, extra))
 }
 
 /// `query` with each credential's value replaced by `REDACTED`, its name
-/// kept. Borrows when there's nothing to redact, which is most requests.
+/// kept. `extra` adds parameter names to the built-in list. Borrows when
+/// there's nothing to redact, which is most requests.
 #[cfg(feature = "trace")]
-pub(crate) fn redact_query(query: &str) -> Cow<'_, str> {
-    if !query.split('&').any(is_sensitive_pair) {
+pub(crate) fn redact_query<'a>(query: &'a str, extra: &[&str]) -> Cow<'a, str> {
+    if !query.split('&').any(|pair| is_sensitive_pair(pair, extra)) {
         return Cow::Borrowed(query);
     }
     let mut redacted = String::with_capacity(query.len());
@@ -158,7 +166,7 @@ pub(crate) fn redact_query(query: &str) -> Cow<'_, str> {
             redacted.push('&');
         }
         match pair.split_once('=') {
-            Some((key, _)) if is_sensitive_pair(pair) => {
+            Some((key, _)) if is_sensitive_pair(pair, extra) => {
                 redacted.push_str(key);
                 redacted.push_str("=REDACTED");
             }
@@ -170,14 +178,17 @@ pub(crate) fn redact_query(query: &str) -> Cow<'_, str> {
 
 /// The request's query for `url.query`, with credentials redacted.
 #[cfg(feature = "trace")]
-pub(crate) fn query<B>(request: &Request<B>) -> Option<Cow<'_, str>> {
-    request.uri().query().map(redact_query)
+pub(crate) fn query<'a, B>(request: &'a Request<B>, extra: &[&str]) -> Option<Cow<'a, str>> {
+    request
+        .uri()
+        .query()
+        .map(|query| redact_query(query, extra))
 }
 
 /// An outgoing request's full URL, for `url.full`: without credentials in
 /// the authority, and with the query redacted as [`query`] does.
 #[cfg(feature = "trace")]
-pub(crate) fn full_url<B>(request: &Request<B>) -> String {
+pub(crate) fn full_url<B>(request: &Request<B>, extra: &[&str]) -> String {
     let uri = request.uri();
     let authority = uri
         .authority()
@@ -190,7 +201,7 @@ pub(crate) fn full_url<B>(request: &Request<B>) -> String {
         .unwrap_or_default();
     let scheme = uri.scheme_str().unwrap_or("http");
     let path = uri.path();
-    let query = query(request);
+    let query = query(request, extra);
     // One allocation, sized for the URL as given.
     let mut url = String::with_capacity(
         scheme.len()
@@ -416,20 +427,38 @@ mod tests {
     #[test]
     fn redact_query_keeps_names_and_borrows_when_clean() {
         assert!(matches!(
-            redact_query("page=2&sort=name"),
+            redact_query("page=2&sort=name", &[]),
             Cow::Borrowed("page=2&sort=name")
         ));
         assert_eq!(
-            redact_query("access_token=abc&page=2&X-Amz-Security-Token=xyz&flag"),
+            redact_query("access_token=abc&page=2&X-Amz-Security-Token=xyz&flag", &[]),
             "access_token=REDACTED&page=2&X-Amz-Security-Token=REDACTED&flag"
         );
         assert_eq!(
-            redact_query("x-amz-signature=abc&TOKEN=def"),
+            redact_query("x-amz-signature=abc&TOKEN=def", &[]),
             "x-amz-signature=REDACTED&TOKEN=REDACTED"
         );
         assert_eq!(
-            redact_query("tokenizer=1&my_token=2"),
+            redact_query("tokenizer=1&my_token=2", &[]),
             "tokenizer=1&my_token=2"
+        );
+    }
+
+    #[cfg(feature = "trace")]
+    #[test]
+    fn extra_keys_extend_the_built_in_list() {
+        assert!(matches!(
+            redact_query("page=2", &["X-Api-Key"]),
+            Cow::Borrowed("page=2")
+        ));
+        assert_eq!(
+            redact_query("x-api-key=abc&access_token=def&page=2", &["X-Api-Key"]),
+            "x-api-key=REDACTED&access_token=REDACTED&page=2"
+        );
+        assert_eq!(
+            redact_query("x-api-key=abc", &[]),
+            "x-api-key=abc",
+            "extras only apply when given"
         );
     }
 
@@ -440,11 +469,11 @@ mod tests {
             .body(())
             .expect("static request");
         assert_eq!(
-            query(&request).as_deref(),
+            query(&request, &[]).as_deref(),
             Some("access_token=REDACTED&page=2")
         );
         let bare = Request::get("/files").body(()).expect("static request");
-        assert_eq!(query(&bare), None);
+        assert_eq!(query(&bare, &[]), None);
     }
 
     #[cfg(feature = "trace")]
@@ -455,7 +484,7 @@ mod tests {
                 .body(())
                 .expect("static request");
         assert_eq!(
-            full_url(&request),
+            full_url(&request, &[]),
             "https://bucket.example/key?X-Goog-Signature=REDACTED&part=2"
         );
     }

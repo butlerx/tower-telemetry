@@ -104,6 +104,8 @@ use crate::request;
 /// `X-Goog-Signature`, `Signature`, `sig`, ...) and common token names
 /// (`access_token`, `token`, `api_key`, ...). The list is the same as
 /// [`OtelClientTraceLayer`](crate::OtelClientTraceLayer)'s for `url.full`.
+/// A [`SpanDecorator`] adds its own names with
+/// [`SENSITIVE_QUERY_KEYS`](SpanDecorator::SENSITIVE_QUERY_KEYS).
 ///
 /// Forwarding headers are trusted as sent: run behind a proxy that sets or
 /// strips them. `url.scheme` is bounded either way, so a client can't create
@@ -318,7 +320,7 @@ fn make_span<B, D: SpanDecorator>(request: &Request<B>) -> Span {
         { HTTP_REQUEST_METHOD } = request::known_method(request.method()),
         { HTTP_ROUTE } = request::route(request),
         { URL_PATH } = request.uri().path(),
-        { URL_QUERY } = request::query(request).as_deref(),
+        { URL_QUERY } = request::query(request, D::SENSITIVE_QUERY_KEYS).as_deref(),
         { URL_SCHEME } = request::scheme(request),
         { NETWORK_PROTOCOL_NAME } = "http",
         { NETWORK_PROTOCOL_VERSION } = request::http_version(request.version()),
