@@ -75,8 +75,9 @@ use crate::request;
 /// | ------------------------------------------------ | ---------------------------------------- |
 /// | `http.request.method`                            | the method; `_OTHER` for non-standard ones |
 /// | `http.route`                                     | axum's matched route (feature `axum`)    |
-/// | `url.path`, `url.query`                          | the URI                                  |
-/// | `url.scheme`                                     | `X-Forwarded-Proto`, else the URI, else `http` |
+/// | `url.path`                                       | the URI                                  |
+/// | `url.query`                                      | the URI, with credential values redacted (see below) |
+/// | `url.scheme`                                     | `http`, `https`, `ws` or `wss`: `X-Forwarded-Proto`, else the URI, else `http`; `_OTHER` for any other |
 /// | `server.address`, `server.port`                  | `X-Forwarded-Host`, else `Host`; the port defaults by scheme |
 /// | `client.address`                                 | `X-Client-IP`, else the first `X-Forwarded-For` |
 /// | `network.protocol.version`                       | the HTTP version                         |
@@ -98,8 +99,17 @@ use crate::request;
 /// time to first byte. Streaming the body isn't included: for that,
 /// [`HttpMetricsLayer`](crate::HttpMetricsLayer) records the full duration.
 ///
+/// `url.query` keeps each parameter's name but replaces the value of a
+/// credential with `REDACTED`: signed-URL parameters (`X-Amz-Signature`,
+/// `X-Goog-Signature`, `Signature`, `sig`, ...) and common token names
+/// (`access_token`, `token`, `api_key`, ...). The list is the same as
+/// [`OtelClientTraceLayer`](crate::OtelClientTraceLayer)'s for `url.full`.
+/// A [`SpanDecorator`] adds its own names with
+/// [`SENSITIVE_QUERY_KEYS`](SpanDecorator::SENSITIVE_QUERY_KEYS).
+///
 /// Forwarding headers are trusted as sent: run behind a proxy that sets or
-/// strips them.
+/// strips them. `url.scheme` is bounded either way, so a client can't create
+/// new series with it.
 ///
 /// # Using the span
 ///
@@ -310,8 +320,8 @@ fn make_span<B, D: SpanDecorator>(request: &Request<B>) -> Span {
         { HTTP_REQUEST_METHOD } = request::known_method(request.method()),
         { HTTP_ROUTE } = request::route(request),
         { URL_PATH } = request.uri().path(),
-        { URL_QUERY } = request.uri().query(),
-        { URL_SCHEME } = request::scheme(request),
+        { URL_QUERY } = request::query(request, D::SENSITIVE_QUERY_KEYS).as_deref(),
+        { URL_SCHEME } = request::url_scheme(request),
         { NETWORK_PROTOCOL_NAME } = "http",
         { NETWORK_PROTOCOL_VERSION } = request::http_version(request.version()),
         { SERVER_ADDRESS } = address,

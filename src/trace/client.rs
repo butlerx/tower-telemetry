@@ -54,7 +54,7 @@ use crate::request;
 /// | --------------------------------- | ------------------------------------------------- |
 /// | `http.request.method`             | the method; `_OTHER` for non-standard ones        |
 /// | `server.address`, `server.port`   | the URI, else `Host`; the port defaults by scheme |
-/// | `url.full`                        | the URI, without credentials and with signed-URL parameters redacted |
+/// | `url.full`                        | the URI, without credentials and with credential query values redacted (see [`OtelTraceLayer`](crate::OtelTraceLayer)) |
 /// | `user_agent.original`             | `User-Agent`                                      |
 /// | `http.request.body.size`          | the body's exact size, else `Content-Length`      |
 /// | `http.response.status_code`       | the response                                      |
@@ -77,11 +77,56 @@ use crate::request;
 #[derive(Debug, Clone, Copy, Default)]
 pub struct OtelClientTraceLayer;
 
+impl OtelClientTraceLayer {
+    /// The same layer, with `keys` added to the query parameter names whose
+    /// values `url.full` redacts. The built-in names always apply; `keys`
+    /// only extends them. Names match without regard to case.
+    ///
+    /// ```
+    /// use tower::ServiceBuilder;
+    /// use tower_telemetry::OtelClientTraceLayer;
+    ///
+    /// # let client = tower::service_fn(|_request: http::Request<String>| async {
+    /// #     Ok::<_, std::convert::Infallible>(http::Response::new(String::new()))
+    /// # });
+    /// // `?x-api-key=...` is recorded as `x-api-key=REDACTED` in `url.full`.
+    /// let client = ServiceBuilder::new()
+    ///     .layer(OtelClientTraceLayer::with_redacted_query_keys(&["x-api-key"]))
+    ///     .service(client);
+    /// # let _ = client;
+    /// ```
+    #[must_use]
+    pub const fn with_redacted_query_keys(
+        keys: &'static [&'static str],
+    ) -> RedactingClientTraceLayer {
+        RedactingClientTraceLayer { keys }
+    }
+}
+
 impl<S> Layer<S> for OtelClientTraceLayer {
     type Service = OtelClientTraceService<S>;
 
     fn layer(&self, inner: S) -> Self::Service {
-        OtelClientTraceService { inner }
+        OtelClientTraceService { inner, keys: &[] }
+    }
+}
+
+/// [`OtelClientTraceLayer`] with extra query parameter names to redact,
+/// from [`OtelClientTraceLayer::with_redacted_query_keys`].
+#[derive(Debug, Clone, Copy)]
+pub struct RedactingClientTraceLayer {
+    /// The extra names, on top of the built-in list.
+    keys: &'static [&'static str],
+}
+
+impl<S> Layer<S> for RedactingClientTraceLayer {
+    type Service = OtelClientTraceService<S>;
+
+    fn layer(&self, inner: S) -> Self::Service {
+        OtelClientTraceService {
+            inner,
+            keys: self.keys,
+        }
     }
 }
 
@@ -94,6 +139,8 @@ impl<S> Layer<S> for OtelClientTraceLayer {
 pub struct OtelClientTraceService<S> {
     /// The wrapped client.
     inner: S,
+    /// Extra query parameter names to redact in `url.full`.
+    keys: &'static [&'static str],
 }
 
 impl<S, ReqBody, ResBody> Service<Request<ReqBody>> for OtelClientTraceService<S>
@@ -112,7 +159,7 @@ where
     }
 
     fn call(&mut self, mut request: Request<ReqBody>) -> Self::Future {
-        let span = make_span(&request);
+        let span = make_span(&request, self.keys);
         let context = span.context();
         opentelemetry::global::get_text_map_propagator(|propagator| {
             propagator.inject_context(&context, &mut HeaderInjector(request.headers_mut()));
@@ -184,7 +231,7 @@ where
 
 /// Start an outgoing request's span with OpenTelemetry's HTTP client fields,
 /// as a child of the current span.
-fn make_span<B: Body>(request: &Request<B>) -> Span {
+fn make_span<B: Body>(request: &Request<B>, keys: &[&str]) -> Span {
     let method = request::known_method(request.method());
     let (address, port) = request::target(request);
     tracing::info_span!(
@@ -196,7 +243,7 @@ fn make_span<B: Body>(request: &Request<B>) -> Span {
         { HTTP_REQUEST_METHOD } = method,
         { SERVER_ADDRESS } = address,
         { SERVER_PORT } = port.map(i64::from),
-        { URL_FULL } = request::full_url(request),
+        { URL_FULL } = request::full_url(request, keys),
         { USER_AGENT_ORIGINAL } = request::header(request.headers(), &USER_AGENT),
         { HTTP_REQUEST_BODY_SIZE } = request
             .body()

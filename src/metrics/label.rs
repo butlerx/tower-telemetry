@@ -77,16 +77,6 @@ pub(crate) fn port(port: u16) -> SharedString {
     }
 }
 
-/// `url.scheme`: static for `http` and `https`, shared for the rest.
-#[inline]
-pub(crate) fn scheme(scheme: &str) -> SharedString {
-    match scheme {
-        "https" => SharedString::const_str("https"),
-        "http" => SharedString::const_str("http"),
-        other => shared(other),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

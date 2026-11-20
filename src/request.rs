@@ -4,6 +4,9 @@
 //! These headers are taken as given: run behind a proxy that sets or strips
 //! them, or the client controls what they say.
 
+#[cfg(feature = "trace")]
+use std::borrow::Cow;
+
 use http::header::{CONTENT_LENGTH, HOST};
 use http::{HeaderMap, HeaderName, Method, Request};
 
@@ -76,10 +79,12 @@ pub(crate) fn split_host_port(authority: &str) -> (&str, Option<u16>) {
 #[cfg(any(feature = "trace", feature = "metrics"))]
 #[inline]
 pub(crate) fn default_port(scheme: &str) -> Option<u16> {
-    match scheme {
-        "http" | "ws" => Some(80),
-        "https" | "wss" => Some(443),
-        _ => None,
+    if scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("ws") {
+        Some(80)
+    } else if scheme.eq_ignore_ascii_case("https") || scheme.eq_ignore_ascii_case("wss") {
+        Some(443)
+    } else {
+        None
     }
 }
 
@@ -112,16 +117,80 @@ pub(crate) fn target<B>(request: &Request<B>) -> (&str, Option<u16>) {
     )
 }
 
-/// Query parameters whose values are credentials: AWS and Google signed
-/// URLs, and Azure SAS tokens. `url.full` records them as `REDACTED`, as the
-/// conventions ask.
+/// Query parameters whose values are credentials: signed URLs (AWS, Google
+/// and Azure SAS), and the common names for bearer and API tokens. Matched
+/// without regard to case.
 #[cfg(feature = "trace")]
-const SENSITIVE_QUERY_KEYS: [&str; 4] = ["AWSAccessKeyId", "Signature", "sig", "X-Goog-Signature"];
+const SENSITIVE_QUERY_KEYS: [&str; 13] = [
+    "AWSAccessKeyId",
+    "Signature",
+    "sig",
+    "X-Goog-Signature",
+    "X-Amz-Signature",
+    "X-Amz-Credential",
+    "X-Amz-Security-Token",
+    "access_token",
+    "refresh_token",
+    "id_token",
+    "token",
+    "api_key",
+    "client_secret",
+];
+
+/// Whether a query parameter's name is a credential: one of the built-in
+/// names, or one of `extra`.
+#[cfg(feature = "trace")]
+fn is_sensitive_key(key: &str, extra: &[&str]) -> bool {
+    SENSITIVE_QUERY_KEYS
+        .iter()
+        .chain(extra)
+        .any(|sensitive| key.eq_ignore_ascii_case(sensitive))
+}
+
+/// Whether one `key=value` pair of a query carries a credential.
+#[cfg(feature = "trace")]
+fn is_sensitive_pair(pair: &str, extra: &[&str]) -> bool {
+    pair.split_once('=')
+        .is_some_and(|(key, _)| is_sensitive_key(key, extra))
+}
+
+/// `query` with each credential's value replaced by `REDACTED`, its name
+/// kept. `extra` adds parameter names to the built-in list. Borrows when
+/// there's nothing to redact, which is most requests.
+#[cfg(feature = "trace")]
+pub(crate) fn redact_query<'a>(query: &'a str, extra: &[&str]) -> Cow<'a, str> {
+    if !query.split('&').any(|pair| is_sensitive_pair(pair, extra)) {
+        return Cow::Borrowed(query);
+    }
+    let mut redacted = String::with_capacity(query.len());
+    for (index, pair) in query.split('&').enumerate() {
+        if index > 0 {
+            redacted.push('&');
+        }
+        match pair.split_once('=') {
+            Some((key, _)) if is_sensitive_pair(pair, extra) => {
+                redacted.push_str(key);
+                redacted.push_str("=REDACTED");
+            }
+            _ => redacted.push_str(pair),
+        }
+    }
+    Cow::Owned(redacted)
+}
+
+/// The request's query for `url.query`, with credentials redacted.
+#[cfg(feature = "trace")]
+pub(crate) fn query<'a, B>(request: &'a Request<B>, extra: &[&str]) -> Option<Cow<'a, str>> {
+    request
+        .uri()
+        .query()
+        .map(|query| redact_query(query, extra))
+}
 
 /// An outgoing request's full URL, for `url.full`: without credentials in
-/// the authority, and with signed-URL parameters redacted.
+/// the authority, and with the query redacted as [`query`] does.
 #[cfg(feature = "trace")]
-pub(crate) fn full_url<B>(request: &Request<B>) -> String {
+pub(crate) fn full_url<B>(request: &Request<B>, extra: &[&str]) -> String {
     let uri = request.uri();
     let authority = uri
         .authority()
@@ -134,10 +203,14 @@ pub(crate) fn full_url<B>(request: &Request<B>) -> String {
         .unwrap_or_default();
     let scheme = uri.scheme_str().unwrap_or("http");
     let path = uri.path();
-    let query = uri.query();
+    let query = query(request, extra);
     // One allocation, sized for the URL as given.
     let mut url = String::with_capacity(
-        scheme.len() + 3 + authority.len() + path.len() + query.map_or(0, |query| query.len() + 1),
+        scheme.len()
+            + 3
+            + authority.len()
+            + path.len()
+            + query.as_deref().map_or(0, |query| query.len() + 1),
     );
     url.push_str(scheme);
     url.push_str("://");
@@ -145,18 +218,7 @@ pub(crate) fn full_url<B>(request: &Request<B>) -> String {
     url.push_str(path);
     if let Some(query) = query {
         url.push('?');
-        for (index, pair) in query.split('&').enumerate() {
-            if index > 0 {
-                url.push('&');
-            }
-            match pair.split_once('=') {
-                Some((key, _)) if SENSITIVE_QUERY_KEYS.contains(&key) => {
-                    url.push_str(key);
-                    url.push_str("=REDACTED");
-                }
-                _ => url.push_str(pair),
-            }
-        }
+        url.push_str(&query);
     }
     url
 }
@@ -175,12 +237,36 @@ pub(crate) fn client_ip(headers: &HeaderMap) -> &str {
     }
 }
 
-/// `X-Forwarded-Proto`, else the request's own scheme, else `http`.
+/// The request's scheme as it arrived: `X-Forwarded-Proto`, else the
+/// request's own scheme, else `http`. Used to infer the port; the value
+/// isn't recorded as is, see [`url_scheme`].
 #[cfg(any(feature = "trace", feature = "metrics"))]
+#[inline]
 pub(crate) fn scheme<B>(request: &Request<B>) -> &str {
     match header(request.headers(), &X_FORWARDED_PROTO) {
         "" => request.uri().scheme_str().unwrap_or("http"),
         forwarded => forwarded,
+    }
+}
+
+/// `url.scheme`: [`scheme`], bounded to `http`, `https`, `ws` or `wss`, and
+/// `_OTHER` for anything else. The value can come from the client, and each
+/// distinct value would be a new series, so the set is fixed, as
+/// [`known_method`] does for methods.
+#[cfg(any(feature = "trace", feature = "metrics"))]
+#[inline]
+pub(crate) fn url_scheme<B>(request: &Request<B>) -> &'static str {
+    let scheme = scheme(request);
+    if scheme.eq_ignore_ascii_case("https") {
+        "https"
+    } else if scheme.eq_ignore_ascii_case("http") {
+        "http"
+    } else if scheme.eq_ignore_ascii_case("wss") {
+        "wss"
+    } else if scheme.eq_ignore_ascii_case("ws") {
+        "ws"
+    } else {
+        "_OTHER"
     }
 }
 
@@ -328,6 +414,107 @@ mod tests {
         assert_eq!(target(&relative), ("api.example", Some(80)));
     }
 
+    #[cfg(any(feature = "trace", feature = "metrics"))]
+    #[test]
+    fn scheme_is_bounded_to_known_schemes_or_other() {
+        let forwarded = |proto: &'static str| {
+            let mut request = Request::get("/").body(()).expect("static request");
+            request
+                .headers_mut()
+                .insert(X_FORWARDED_PROTO, HeaderValue::from_static(proto));
+            request
+        };
+        assert_eq!(url_scheme(&forwarded("HTTPS")), "https");
+        assert_eq!(url_scheme(&forwarded("WSS")), "wss");
+        assert_eq!(url_scheme(&forwarded("ws")), "ws");
+        assert_eq!(url_scheme(&forwarded("javascript")), "_OTHER");
+        assert_eq!(url_scheme(&forwarded("x-1")), "_OTHER");
+
+        let absolute = Request::get("x-1://host/a")
+            .body(())
+            .expect("static request");
+        assert_eq!(url_scheme(&absolute), "_OTHER");
+        let secure = Request::get("https://host/a")
+            .body(())
+            .expect("static request");
+        assert_eq!(url_scheme(&secure), "https");
+    }
+
+    #[cfg(any(feature = "trace", feature = "metrics"))]
+    #[test]
+    fn websocket_schemes_keep_their_default_ports() {
+        let forwarded = |proto: &'static str| {
+            Request::get("/")
+                .header(HOST, "api.example")
+                .header(X_FORWARDED_PROTO, proto)
+                .body(())
+                .expect("static request")
+        };
+        assert_eq!(
+            server_address(&forwarded("wss")),
+            ("api.example", Some(443))
+        );
+        assert_eq!(server_address(&forwarded("ws")), ("api.example", Some(80)));
+        assert_eq!(
+            server_address(&forwarded("WSS")),
+            ("api.example", Some(443))
+        );
+        assert_eq!(server_address(&forwarded("x-1")), ("api.example", None));
+    }
+
+    #[cfg(feature = "trace")]
+    #[test]
+    fn redact_query_keeps_names_and_borrows_when_clean() {
+        assert!(matches!(
+            redact_query("page=2&sort=name", &[]),
+            Cow::Borrowed("page=2&sort=name")
+        ));
+        assert_eq!(
+            redact_query("access_token=abc&page=2&X-Amz-Security-Token=xyz&flag", &[]),
+            "access_token=REDACTED&page=2&X-Amz-Security-Token=REDACTED&flag"
+        );
+        assert_eq!(
+            redact_query("x-amz-signature=abc&TOKEN=def", &[]),
+            "x-amz-signature=REDACTED&TOKEN=REDACTED"
+        );
+        assert_eq!(
+            redact_query("tokenizer=1&my_token=2", &[]),
+            "tokenizer=1&my_token=2"
+        );
+    }
+
+    #[cfg(feature = "trace")]
+    #[test]
+    fn extra_keys_extend_the_built_in_list() {
+        assert!(matches!(
+            redact_query("page=2", &["X-Api-Key"]),
+            Cow::Borrowed("page=2")
+        ));
+        assert_eq!(
+            redact_query("x-api-key=abc&access_token=def&page=2", &["X-Api-Key"]),
+            "x-api-key=REDACTED&access_token=REDACTED&page=2"
+        );
+        assert_eq!(
+            redact_query("x-api-key=abc", &[]),
+            "x-api-key=abc",
+            "extras only apply when given"
+        );
+    }
+
+    #[cfg(feature = "trace")]
+    #[test]
+    fn server_query_is_redacted() {
+        let request = Request::get("/files?access_token=abc&page=2")
+            .body(())
+            .expect("static request");
+        assert_eq!(
+            query(&request, &[]).as_deref(),
+            Some("access_token=REDACTED&page=2")
+        );
+        let bare = Request::get("/files").body(()).expect("static request");
+        assert_eq!(query(&bare, &[]), None);
+    }
+
     #[cfg(feature = "trace")]
     #[test]
     fn full_url_drops_credentials_and_redacts_signatures() {
@@ -336,7 +523,7 @@ mod tests {
                 .body(())
                 .expect("static request");
         assert_eq!(
-            full_url(&request),
+            full_url(&request, &[]),
             "https://bucket.example/key?X-Goog-Signature=REDACTED&part=2"
         );
     }

@@ -62,6 +62,21 @@ use tower_telemetry::{HealthcheckFilter, OtelTraceLayer, PropagatingSpanDecorato
 let layer = OtelTraceLayer::<PropagatingSpanDecorator, HealthcheckFilter>::default();
 ```
 
+A decorator can also name query parameters whose values the span's `url.query` redacts. Its names are added to the built-in list, never replacing it:
+
+```rust
+use tower_telemetry::{OtelTraceLayer, SpanDecorator};
+
+#[derive(Debug, Clone, Copy, Default)]
+struct ApiKeyDecorator;
+
+impl SpanDecorator for ApiKeyDecorator {
+    const SENSITIVE_QUERY_KEYS: &'static [&'static str] = &["x-api-key"];
+}
+
+let layer = OtelTraceLayer::<ApiKeyDecorator>::default();
+```
+
 ## Request filters
 
 A `RequestFilter` drops requests from tracing before their span is made. It doesn't affect metrics. Implement it on a unit struct:
@@ -143,7 +158,7 @@ Metrics use OpenTelemetry's HTTP server names, plus a request counter and time t
 
 The layer describes each metric's unit, so install your exporter before building the app. With Prometheus, use `PrometheusBuilder::new().with_recommended_naming(true)` to get the names above; without it the unit and `_total` suffixes are left off. DogStatsD sends the dotted names as they are.
 
-Labels are OpenTelemetry's: `http.request.method`, `url.scheme`, `network.protocol.version`, `http.route` (when a route matched), `http.response.status_code`, and `error.type` on `5xx` and failures. `server.address` and `server.port` are opt-in with `with_host_label(true)`. In Prometheus the dots become underscores (`http_request_method`). Add your own from a handler with `MetricLabels` in the response extensions. Keep their values few, since every distinct set is a new time series:
+Labels are OpenTelemetry's: `http.request.method`, `url.scheme` (`http`, `https`, `ws` or `wss`, `_OTHER` for anything else), `network.protocol.version`, `http.route` (when a route matched), `http.response.status_code`, and `error.type` on `5xx` and failures. `server.address` and `server.port` are opt-in with `with_host_label(true)`. In Prometheus the dots become underscores (`http_request_method`). Add your own from a handler with `MetricLabels` in the response extensions. Keep their values few, since every distinct set is a new time series:
 
 ```rust
 response
@@ -176,7 +191,15 @@ let client = ServiceBuilder::new()
     .service(client);
 ```
 
-Each request gets a client span named by its method, a child of the current span. Its trace context goes into the request's headers through the global propagator, so the server continues the trace. `url.full` is recorded without credentials, and with signed-URL parameters (`Signature`, `sig`, `X-Goog-Signature`, `AWSAccessKeyId`) redacted. A `4xx` marks the span as an error, as the conventions ask for clients.
+Each request gets a client span named by its method, a child of the current span. Its trace context goes into the request's headers through the global propagator, so the server continues the trace. `url.full` is recorded without credentials, and with credential query values redacted: the same list as the server span's `url.query`, below. A `4xx` marks the span as an error, as the conventions ask for clients.
+
+To redact more query parameters in `url.full`, add their names to the built-in list:
+
+```rust
+use tower_telemetry::OtelClientTraceLayer;
+
+let layer = OtelClientTraceLayer::with_redacted_query_keys(&["x-api-key"]);
+```
 
 The metrics are the server's six under `http.client.*` (`MetricNames::CLIENT`), labelled with `http.request.method`, `server.address`, `server.port`, `network.protocol.version`, `http.response.status_code` and `error.type` (on `4xx`, `5xx` and failures).
 
@@ -255,3 +278,5 @@ The [`messaging` docs](https://docs.rs/tower-telemetry/latest/tower_telemetry/me
 ## Forwarding headers
 
 Host, client address and scheme are read from `X-Forwarded-Host`, `X-Client-IP`/`X-Forwarded-For` and `X-Forwarded-Proto` when present. Run behind a proxy that sets or strips them.
+
+The server span's `url.query` keeps parameter names and redacts the values of credentials: signed-URL parameters (`X-Amz-Signature`, `X-Amz-Credential`, `X-Amz-Security-Token`, `X-Goog-Signature`, `Signature`, `sig`, `AWSAccessKeyId`) and token names (`access_token`, `refresh_token`, `id_token`, `token`, `api_key`, `client_secret`). Names match without regard to case, and a `SpanDecorator` can add its own. The span and the metrics record `url.scheme` only as `http`, `https`, `ws`, `wss` or `_OTHER`, so a client sending other schemes can't add metric series. The port is still inferred from the scheme as sent.

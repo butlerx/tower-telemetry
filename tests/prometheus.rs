@@ -29,7 +29,55 @@ async fn prometheus_names_follow_recommended_naming() {
         .expect("infallible");
     response.into_body().collect().await.expect("infallible");
 
+    // A client-chosen scheme is bounded, so it can't mint a series.
+    let service = ServiceBuilder::new()
+        .layer(HttpMetricsLayer::default())
+        .service_fn(|_request: Request<()>| async {
+            Ok::<_, Infallible>(Response::new(Full::new(Bytes::new())))
+        });
+    service
+        .oneshot(
+            Request::get("x-1://host/")
+                .body(())
+                .expect("static request"),
+        )
+        .await
+        .expect("infallible");
+
+    // Behind a TLS-terminating proxy, `wss` keeps its default port.
+    let service = ServiceBuilder::new()
+        .layer(HttpMetricsLayer::default().with_host_label(true))
+        .service_fn(|_request: Request<()>| async {
+            Ok::<_, Infallible>(Response::new(Full::new(Bytes::new())))
+        });
+    service
+        .oneshot(
+            Request::get("/socket")
+                .header(http::header::HOST, "api.example")
+                .header("x-forwarded-proto", "wss")
+                .body(())
+                .expect("static request"),
+        )
+        .await
+        .expect("infallible");
+
     let rendered = handle.render();
+    assert!(
+        rendered.lines().any(|line| {
+            line.starts_with("http_server_requests_total{")
+                && line.contains(r#"url_scheme="wss""#)
+                && line.contains(r#"server_port="443""#)
+        }),
+        "wss keeps the default port in:\n{rendered}"
+    );
+    assert!(
+        rendered.contains(r#"url_scheme="_OTHER""#),
+        "unknown schemes are bounded in:\n{rendered}"
+    );
+    assert!(
+        !rendered.contains(r#"url_scheme="x-1""#),
+        "the client's scheme is not a label in:\n{rendered}"
+    );
     for series in [
         r#"http_server_requests_total{http_request_method="GET",url_scheme="http",network_protocol_version="1.1",http_response_status_code="200"} 1"#,
         "http_server_request_duration_seconds_count",

@@ -10,7 +10,9 @@ mod decorator;
 mod filter;
 mod layer;
 
-pub use client::{ClientResponseFuture, OtelClientTraceLayer, OtelClientTraceService};
+pub use client::{
+    ClientResponseFuture, OtelClientTraceLayer, OtelClientTraceService, RedactingClientTraceLayer,
+};
 pub use decorator::{
     DefaultSpanDecorator, PropagatingSpanDecorator, SpanDecorator, mark_server_errors,
 };
