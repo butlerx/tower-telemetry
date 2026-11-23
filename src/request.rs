@@ -118,8 +118,8 @@ pub(crate) fn target<B>(request: &Request<B>) -> (&str, Option<u16>) {
 }
 
 /// Query parameters whose values are credentials: signed URLs (AWS, Google
-/// and Azure SAS), and the common names for bearer and API tokens. Matched
-/// without regard to case.
+/// and Azure SAS), and the common names for bearer and API tokens. Names
+/// are matched after percent-decoding, without regard to case.
 #[cfg(feature = "trace")]
 const SENSITIVE_QUERY_KEYS: [&str; 13] = [
     "AWSAccessKeyId",
@@ -137,14 +137,61 @@ const SENSITIVE_QUERY_KEYS: [&str; 13] = [
     "client_secret",
 ];
 
+/// One hex digit's value, for a percent-escape.
+#[cfg(feature = "trace")]
+fn hex_value(digit: u8) -> Option<u8> {
+    match digit {
+        b'0'..=b'9' => Some(digit - b'0'),
+        b'a'..=b'f' => Some(digit - b'a' + 10),
+        b'A'..=b'F' => Some(digit - b'A' + 10),
+        _ => None,
+    }
+}
+
+/// A query parameter's name, decoded as form encoding has it: `+` is a
+/// space and `%XX` is that byte. Borrows when there's nothing to decode,
+/// which is most names. `None` for an escape that isn't two hex digits, or
+/// a result that isn't UTF-8: such a name can't be one of the credentials.
+#[cfg(feature = "trace")]
+fn decode_name(name: &str) -> Option<Cow<'_, str>> {
+    if !name.contains(['%', '+']) {
+        return Some(Cow::Borrowed(name));
+    }
+    let bytes = name.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while let Some(&byte) = bytes.get(index) {
+        match byte {
+            b'+' => {
+                decoded.push(b' ');
+                index += 1;
+            }
+            b'%' => {
+                let high = hex_value(*bytes.get(index + 1)?)?;
+                let low = hex_value(*bytes.get(index + 2)?)?;
+                decoded.push(high << 4 | low);
+                index += 3;
+            }
+            _ => {
+                decoded.push(byte);
+                index += 1;
+            }
+        }
+    }
+    String::from_utf8(decoded).ok().map(Cow::Owned)
+}
+
 /// Whether a query parameter's name is a credential: one of the built-in
-/// names, or one of `extra`.
+/// names, or one of `extra`, compared after decoding and without regard to
+/// case.
 #[cfg(feature = "trace")]
 fn is_sensitive_key(key: &str, extra: &[&str]) -> bool {
-    SENSITIVE_QUERY_KEYS
-        .iter()
-        .chain(extra)
-        .any(|sensitive| key.eq_ignore_ascii_case(sensitive))
+    decode_name(key).is_some_and(|name| {
+        SENSITIVE_QUERY_KEYS
+            .iter()
+            .chain(extra)
+            .any(|sensitive| name.eq_ignore_ascii_case(sensitive))
+    })
 }
 
 /// Whether one `key=value` pair of a query carries a credential.
@@ -499,6 +546,51 @@ mod tests {
             "x-api-key=abc",
             "extras only apply when given"
         );
+    }
+
+    #[cfg(feature = "trace")]
+    #[test]
+    fn encoded_names_are_matched_decoded() {
+        assert_eq!(
+            redact_query("access%5Ftoken=secret&page=2", &[]),
+            "access%5Ftoken=REDACTED&page=2"
+        );
+        assert_eq!(
+            redact_query("ACCESS%5fTOKEN=secret", &[]),
+            "ACCESS%5fTOKEN=REDACTED"
+        );
+        assert_eq!(
+            redact_query("%61ccess_token=secret", &[]),
+            "%61ccess_token=REDACTED"
+        );
+        assert_eq!(
+            redact_query("x%2Dapi%2Dkey=abc", &["x-api-key"]),
+            "x%2Dapi%2Dkey=REDACTED",
+            "user-added names are matched decoded too"
+        );
+        assert_eq!(
+            redact_query("x+api+key=abc", &["x api key"]),
+            "x+api+key=REDACTED",
+            "`+` decodes to a space"
+        );
+        assert_eq!(
+            redact_query("pa%67e=2", &[]),
+            "pa%67e=2",
+            "a decoded name that isn't a credential is left alone"
+        );
+    }
+
+    #[cfg(feature = "trace")]
+    #[test]
+    fn invalid_escapes_do_not_match_or_panic() {
+        for name in ["access%zz", "access%5", "%", "%FF", "access%2"] {
+            let query = format!("{name}=secret&page=2");
+            assert_eq!(
+                redact_query(&query, &[]),
+                query,
+                "{name} is not a credential name"
+            );
+        }
     }
 
     #[cfg(feature = "trace")]
