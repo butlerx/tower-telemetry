@@ -2,7 +2,8 @@
 //!
 //! - [`HttpMetricsLayer`]: metrics for the requests a server answers.
 //! - [`HttpClientMetricsLayer`]: metrics for the requests a client sends.
-//! - [`install_panic_counter`] and, with `runtime-metrics`,
+//! - [`install_panic_counter`], with `process-metrics`
+//!   [`export_process_metrics`], and with `runtime-metrics`
 //!   [`export_runtime_metrics`]: the process itself.
 //!
 //! This crate records; it does not export. Install any `metrics` exporter
@@ -27,6 +28,8 @@ mod runtime;
 pub use client::{HttpClientMetricsLayer, HttpClientMetricsService};
 pub use layer::{HttpMetricsLayer, HttpMetricsService, MetricLabels};
 pub use process::install_panic_counter;
+#[cfg(feature = "process-metrics")]
+pub use process::{PROCESS_METRICS_INTERVAL, export_process_metrics};
 pub use recording::{MetricsBody, MetricsFuture};
 #[cfg(feature = "runtime-metrics")]
 pub use runtime::export_runtime_metrics;

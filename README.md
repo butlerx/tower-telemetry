@@ -32,6 +32,7 @@ Needs Rust 1.88 or later.
 | `axum`            | no      | Names spans and metrics by axum's matched route (`GET /users/{id}`)  |
 | `messaging`       | no      | `MessagingSpan`, `inject_context`/`extract_context`, `MessageTraceLayer` |
 | `runtime-metrics` | no      | `export_runtime_metrics`: Tokio runtime gauges, sampled every second |
+| `process-metrics` | no      | `export_process_metrics`: CPU, memory, file descriptor and thread metrics, sampled every 5 seconds |
 
 ## axum
 
@@ -206,11 +207,25 @@ The metrics are the server's six under `http.client.*` (`MetricNames::CLIENT`), 
 ## Process metrics
 
 ```rust
-use tower_telemetry::metrics::{export_runtime_metrics, install_panic_counter};
+use tower_telemetry::metrics::{export_process_metrics, export_runtime_metrics, install_panic_counter};
 
 install_panic_counter("process_panics_total"); // counts panics, then runs the previous hook
-let sampler = export_runtime_metrics();        // `runtime-metrics`: tokio_runtime_* gauges, every second
+let runtime = export_runtime_metrics();        // `runtime-metrics`: tokio_runtime_* gauges, every second; more with `--cfg tokio_unstable`
+let process = export_process_metrics();        // `process-metrics`: process_* metrics, every 5 seconds
 ```
+
+`export_process_metrics` records the standard Prometheus process metrics on Linux, macOS, Windows and the BSDs:
+
+| Name                               | Type    | What it is                                         |
+| ---------------------------------- | ------- | -------------------------------------------------- |
+| `process_cpu_seconds_total`        | counter | user and system CPU time                           |
+| `process_resident_memory_bytes`    | gauge   | resident memory (RSS)                              |
+| `process_virtual_memory_bytes`     | gauge   | virtual memory                                     |
+| `process_virtual_memory_max_bytes` | gauge   | virtual memory limit (not on Windows)              |
+| `process_open_fds`                 | gauge   | open file descriptors (handles on Windows)         |
+| `process_max_fds`                  | gauge   | file descriptor limit                              |
+| `process_threads`                  | gauge   | OS threads (not on Windows)                        |
+| `process_start_time_seconds`       | gauge   | start time, seconds since the Unix epoch           |
 
 ## Messaging
 

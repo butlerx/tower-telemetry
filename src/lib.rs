@@ -15,6 +15,8 @@
 //!   [`messaging::MessageTraceLayer`] for consumers.
 //! - [`metrics::export_runtime_metrics`] (feature `runtime-metrics`): Tokio
 //!   runtime metrics.
+//! - [`metrics::export_process_metrics`] (feature `process-metrics`): CPU,
+//!   memory, file descriptors and threads.
 //!
 //! With the `axum` feature, spans and metrics are named by the matched route
 //! (`GET /users/{id}`), not the path, which carries identifiers.

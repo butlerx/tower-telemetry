@@ -46,6 +46,11 @@ jobs:
         run: cargo build --locked --all-features --verbose
       - name: Run tests
         run: cargo test --locked --all-features --verbose
+      - name: Run tests with tokio_unstable
+        run: cargo test --locked --all-features --lib
+        env:
+          RUSTFLAGS: --cfg tokio_unstable
+          RUSTDOCFLAGS: --cfg tokio_unstable
 
   msrv:
     runs-on: ubuntu-latest
