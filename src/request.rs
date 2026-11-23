@@ -186,7 +186,10 @@ fn decode_name(name: &str) -> Option<Cow<'_, str>> {
 /// case.
 #[cfg(feature = "trace")]
 fn is_sensitive_key(key: &str, extra: &[&str]) -> bool {
-    if extra.iter().any(|sensitive| key.eq_ignore_ascii_case(sensitive)) {
+    if extra
+        .iter()
+        .any(|sensitive| key.eq_ignore_ascii_case(sensitive))
+    {
         return true;
     }
     decode_name(key).is_some_and(|name| {
