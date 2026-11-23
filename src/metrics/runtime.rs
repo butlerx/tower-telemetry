@@ -33,76 +33,78 @@ const INTERVAL: Duration = Duration::from_secs(1);
 ///
 /// # Metrics
 ///
+/// Named in OpenTelemetry's style (it defines no Tokio metrics), which
+/// exporters adapt: Prometheus with recommended naming turns
+/// `tokio.runtime.worker.parks` into `tokio_runtime_worker_parks_total`.
 /// None have labels: add your service's and environment's as the exporter's
 /// global labels. The first sample is taken a second after the call.
 ///
-/// | Name                                          | Type    | What it is                                         |
-/// | --------------------------------------------- | ------- | -------------------------------------------------- |
-/// | `tokio_runtime_workers`                       | gauge   | worker threads                                     |
-/// | `tokio_runtime_live_tasks`                    | gauge   | tasks spawned and not yet finished                 |
-/// | `tokio_runtime_global_queue_depth`            | gauge   | tasks waiting in the global queue for a worker    |
-/// | `tokio_runtime_worker_busy_ratio`             | gauge   | share of the last second the average worker was busy, 0 to 1 |
-/// | `tokio_runtime_worker_busy_ratio_max`         | gauge   | the same for the busiest worker                    |
-/// | `tokio_runtime_worker_busy_ratio_min`         | gauge   | the same for the least busy worker                 |
-/// | `tokio_runtime_worker_busy_microseconds_total` | counter | time workers have spent busy, summed over workers |
-/// | `tokio_runtime_worker_parks_total`            | counter | times workers have parked, with nothing to do     |
+/// | Name                                   | Type    | Unit         | What it is                                              |
+/// | -------------------------------------- | ------- | ------------ | ------------------------------------------------------- |
+/// | `tokio.runtime.worker.count`           | gauge   | count        | worker threads                                          |
+/// | `tokio.runtime.task.count`             | gauge   | count        | tasks spawned and not yet finished                      |
+/// | `tokio.runtime.global_queue.depth`     | gauge   | count        | tasks waiting in the global queue for a worker          |
+/// | `tokio.runtime.worker.utilization`     | gauge   | 0 to 1       | share of the last second the average worker was busy    |
+/// | `tokio.runtime.worker.utilization.max` | gauge   | 0 to 1       | the same for the busiest worker                         |
+/// | `tokio.runtime.worker.utilization.min` | gauge   | 0 to 1       | the same for the least busy worker                      |
+/// | `tokio.runtime.worker.busy.time`       | counter | microseconds | time workers have spent busy, summed over workers       |
+/// | `tokio.runtime.worker.parks`           | counter | count        | times workers have parked, with nothing to do           |
 ///
 /// Built with `RUSTFLAGS="--cfg tokio_unstable"`, these are recorded too:
 ///
-/// | Name                                              | Type    | What it is                                         |
-/// | ------------------------------------------------- | ------- | -------------------------------------------------- |
-/// | `tokio_runtime_poll_duration_mean_seconds`        | gauge   | moving average of one task poll, over all workers  |
-/// | `tokio_runtime_poll_duration_mean_max_seconds`    | gauge   | the same for the worker with the slowest polls     |
-/// | `tokio_runtime_polls_total`                       | counter | task polls, summed over workers                    |
-/// | `tokio_runtime_steals_total`                      | counter | tasks idle workers took from busy workers' queues  |
-/// | `tokio_runtime_local_queue_depth`                 | gauge   | tasks waiting in workers' local queues, summed     |
-/// | `tokio_runtime_local_queue_depth_max`             | gauge   | the same for the worker with the longest queue     |
-/// | `tokio_runtime_blocking_threads`                  | gauge   | threads in the `spawn_blocking` pool               |
-/// | `tokio_runtime_blocking_threads_idle`             | gauge   | of those, threads with nothing to do               |
-/// | `tokio_runtime_blocking_queue_depth`              | gauge   | `spawn_blocking` tasks waiting for a thread        |
+/// | Name                                       | Type    | Unit    | What it is                                         |
+/// | ------------------------------------------ | ------- | ------- | -------------------------------------------------- |
+/// | `tokio.runtime.poll.duration.mean`         | gauge   | seconds | moving average of one task poll, over all workers  |
+/// | `tokio.runtime.poll.duration.mean.max`     | gauge   | seconds | the same for the worker with the slowest polls     |
+/// | `tokio.runtime.worker.polls`               | counter | count   | task polls, summed over workers                    |
+/// | `tokio.runtime.worker.steals`              | counter | count   | tasks idle workers took from busy workers' queues  |
+/// | `tokio.runtime.local_queue.depth`          | gauge   | count   | tasks waiting in workers' local queues, summed     |
+/// | `tokio.runtime.local_queue.depth.max`      | gauge   | count   | the same for the worker with the longest queue     |
+/// | `tokio.runtime.blocking.thread.count`      | gauge   | count   | threads in the `spawn_blocking` pool               |
+/// | `tokio.runtime.blocking.thread.idle.count` | gauge   | count   | of those, threads with nothing to do               |
+/// | `tokio.runtime.blocking.queue.depth`       | gauge   | count   | `spawn_blocking` tasks waiting for a thread        |
 ///
 /// # Units
 ///
 /// As across this crate: durations in seconds, ratios from 0 to 1, and
-/// counts. The exception is `tokio_runtime_worker_busy_microseconds_total`:
-/// `metrics` counters are integers, and whole seconds would drop the short
-/// busy periods that make up most of a worker's time.
+/// counts. The exception is `tokio.runtime.worker.busy.time`, in
+/// microseconds: `metrics` counters are integers, and whole seconds would
+/// drop the short busy periods that make up most of a worker's time.
 ///
 /// # Reading them
 ///
-/// - **Saturation:** a mean busy ratio near 1 means the runtime has no
+/// - **Saturation:** a mean `utilization` near 1 means the runtime has no
 ///   spare capacity; it's a good signal to autoscale on, better than CPU,
 ///   which also counts blocking threads and other processes.
-/// - **Blocking:** one worker's `_max` pinned at 1 while the mean stays low
-///   points to a task blocking its thread (synchronous I/O, a long
-///   computation, a held lock).
-/// - **Backlog:** a growing `global_queue_depth` means tasks are spawned
+/// - **Blocking:** one worker's `utilization.max` pinned at 1 while the
+///   mean stays low points to a task blocking its thread (synchronous I/O, a
+///   long computation, a held lock).
+/// - **Backlog:** a growing `global_queue.depth` means tasks are spawned
 ///   faster than workers pick them up.
-/// - **Leaks:** `live_tasks` that only climbs points to tasks that never
+/// - **Leaks:** a `task.count` that only climbs points to tasks that never
 ///   finish.
 ///
 /// With `tokio_unstable`:
 ///
 /// - **Slow polls:** a poll should take microseconds. A mean in the
-///   milliseconds, or a `_max` far above the mean, points to a task doing
-///   synchronous work between `.await`s.
-/// - **Blocking pool saturation:** a `blocking_queue_depth` above 0 means
+///   milliseconds, or a `mean.max` far above the mean, points to a task
+///   doing synchronous work between `.await`s.
+/// - **Blocking pool saturation:** a `blocking.queue.depth` above 0 means
 ///   `spawn_blocking` work (file I/O, DNS, hashing) is waiting for a thread;
-///   `blocking_threads` at the pool's limit with no idle threads confirms it.
-/// - **Uneven load:** `local_queue_depth_max` well above
-///   `local_queue_depth / workers` means one worker has a backlog the others
-///   aren't stealing. A high `rate(tokio_runtime_steals_total[1m])` means
-///   work keeps landing on a few workers and the rest are rebalancing it.
+///   `blocking.thread.count` at the pool's limit with no idle threads
+///   confirms it.
+/// - **Uneven load:** `local_queue.depth.max` well above
+///   `local_queue.depth / worker.count` means one worker has a backlog the
+///   others aren't stealing. A high steal rate means work keeps landing on a
+///   few workers and the rest are rebalancing it.
 ///
 /// Rates of the counters (`rate(...[1m])` in Prometheus) give busy time per
-/// second, across all workers, and parks per second.
+/// second, across all workers, and parks, polls and steals per second.
 ///
 /// # Limits
 ///
 /// Without `tokio_unstable`, only metrics Tokio exposes on stable Rust are
-/// recorded. Poll counts,
-/// steals, local queue depths and scheduling delays need the
-/// `tokio_unstable` cfg and aren't sampled. Calling this twice on one
+/// recorded. Scheduling delays aren't sampled either way. Calling this twice on one
 /// runtime double-counts the counters, and samplers on two runtimes write to
 /// the same unlabelled series.
 ///
@@ -136,39 +138,39 @@ pub fn export_runtime_metrics() -> JoinHandle<()> {
 /// exporters that publish them (Prometheus `# HELP` and `# UNIT` lines).
 fn describe() {
     describe_gauge!(
-        "tokio_runtime_workers",
+        "tokio.runtime.worker.count",
         Unit::Count,
         "Tokio runtime worker threads."
     );
     describe_gauge!(
-        "tokio_runtime_live_tasks",
+        "tokio.runtime.task.count",
         Unit::Count,
         "Tokio tasks spawned and not yet finished."
     );
     describe_gauge!(
-        "tokio_runtime_global_queue_depth",
+        "tokio.runtime.global_queue.depth",
         Unit::Count,
         "Tokio tasks waiting in the global queue for a worker."
     );
     describe_gauge!(
-        "tokio_runtime_worker_busy_ratio",
+        "tokio.runtime.worker.utilization",
         "Share of the last second the average Tokio worker was busy, from 0 to 1."
     );
     describe_gauge!(
-        "tokio_runtime_worker_busy_ratio_max",
+        "tokio.runtime.worker.utilization.max",
         "Share of the last second the busiest Tokio worker was busy, from 0 to 1."
     );
     describe_gauge!(
-        "tokio_runtime_worker_busy_ratio_min",
+        "tokio.runtime.worker.utilization.min",
         "Share of the last second the least busy Tokio worker was busy, from 0 to 1."
     );
     describe_counter!(
-        "tokio_runtime_worker_busy_microseconds_total",
+        "tokio.runtime.worker.busy.time",
         Unit::Microseconds,
         "Time Tokio workers have spent busy, summed over workers."
     );
     describe_counter!(
-        "tokio_runtime_worker_parks_total",
+        "tokio.runtime.worker.parks",
         Unit::Count,
         "Times Tokio workers have parked with nothing to do."
     );
@@ -180,47 +182,47 @@ fn describe() {
 /// Describe the metrics Tokio only exposes with `--cfg tokio_unstable`.
 fn describe_unstable() {
     describe_gauge!(
-        "tokio_runtime_poll_duration_mean_seconds",
+        "tokio.runtime.poll.duration.mean",
         Unit::Seconds,
         "Moving average of one Tokio task poll, over all workers."
     );
     describe_gauge!(
-        "tokio_runtime_poll_duration_mean_max_seconds",
+        "tokio.runtime.poll.duration.mean.max",
         Unit::Seconds,
         "Moving average of one Tokio task poll, on the worker with the slowest polls."
     );
     describe_counter!(
-        "tokio_runtime_polls_total",
+        "tokio.runtime.worker.polls",
         Unit::Count,
         "Tokio task polls, summed over workers."
     );
     describe_counter!(
-        "tokio_runtime_steals_total",
+        "tokio.runtime.worker.steals",
         Unit::Count,
         "Tokio tasks idle workers took from other workers' queues."
     );
     describe_gauge!(
-        "tokio_runtime_local_queue_depth",
+        "tokio.runtime.local_queue.depth",
         Unit::Count,
         "Tokio tasks waiting in workers' local queues, summed over workers."
     );
     describe_gauge!(
-        "tokio_runtime_local_queue_depth_max",
+        "tokio.runtime.local_queue.depth.max",
         Unit::Count,
         "Tokio tasks waiting in the longest worker local queue."
     );
     describe_gauge!(
-        "tokio_runtime_blocking_threads",
+        "tokio.runtime.blocking.thread.count",
         Unit::Count,
         "Threads in the Tokio spawn_blocking pool."
     );
     describe_gauge!(
-        "tokio_runtime_blocking_threads_idle",
+        "tokio.runtime.blocking.thread.idle.count",
         Unit::Count,
         "Idle threads in the Tokio spawn_blocking pool."
     );
     describe_gauge!(
-        "tokio_runtime_blocking_queue_depth",
+        "tokio.runtime.blocking.queue.depth",
         Unit::Count,
         "Tokio spawn_blocking tasks waiting for a thread."
     );
@@ -233,23 +235,23 @@ fn describe_unstable() {
 /// Record one sample of the runtime's metrics.
 fn record(metrics: &RuntimeMetrics) {
     let elapsed = metrics.elapsed;
-    gauge!("tokio_runtime_workers").set(metrics.workers_count as f64);
-    gauge!("tokio_runtime_live_tasks").set(metrics.live_tasks_count as f64);
-    gauge!("tokio_runtime_global_queue_depth").set(metrics.global_queue_depth as f64);
-    gauge!("tokio_runtime_worker_busy_ratio").set(mean_worker_busy_ratio(
+    gauge!("tokio.runtime.worker.count").set(metrics.workers_count as f64);
+    gauge!("tokio.runtime.task.count").set(metrics.live_tasks_count as f64);
+    gauge!("tokio.runtime.global_queue.depth").set(metrics.global_queue_depth as f64);
+    gauge!("tokio.runtime.worker.utilization").set(mean_worker_busy_ratio(
         metrics.total_busy_duration,
         elapsed,
         metrics.workers_count,
     ));
-    gauge!("tokio_runtime_worker_busy_ratio_max")
+    gauge!("tokio.runtime.worker.utilization.max")
         .set(duration_ratio(metrics.max_busy_duration, elapsed).clamp(0.0, 1.0));
-    gauge!("tokio_runtime_worker_busy_ratio_min")
+    gauge!("tokio.runtime.worker.utilization.min")
         .set(duration_ratio(metrics.min_busy_duration, elapsed).clamp(0.0, 1.0));
     // `metrics` counters are integers: microseconds keep sub-second busy
     // periods that whole seconds would drop.
-    counter!("tokio_runtime_worker_busy_microseconds_total")
+    counter!("tokio.runtime.worker.busy.time")
         .increment(u64::try_from(metrics.total_busy_duration.as_micros()).unwrap_or(u64::MAX));
-    counter!("tokio_runtime_worker_parks_total").increment(metrics.total_park_count);
+    counter!("tokio.runtime.worker.parks").increment(metrics.total_park_count);
     #[cfg(tokio_unstable)]
     record_unstable(metrics);
 }
@@ -261,17 +263,17 @@ fn record(metrics: &RuntimeMetrics) {
 )]
 /// Record the metrics Tokio only exposes with `--cfg tokio_unstable`.
 fn record_unstable(metrics: &RuntimeMetrics) {
-    gauge!("tokio_runtime_poll_duration_mean_seconds")
-        .set(metrics.mean_poll_duration.as_secs_f64());
-    gauge!("tokio_runtime_poll_duration_mean_max_seconds")
+    gauge!("tokio.runtime.poll.duration.mean").set(metrics.mean_poll_duration.as_secs_f64());
+    gauge!("tokio.runtime.poll.duration.mean.max")
         .set(metrics.mean_poll_duration_worker_max.as_secs_f64());
-    counter!("tokio_runtime_polls_total").increment(metrics.total_polls_count);
-    counter!("tokio_runtime_steals_total").increment(metrics.total_steal_count);
-    gauge!("tokio_runtime_local_queue_depth").set(metrics.total_local_queue_depth as f64);
-    gauge!("tokio_runtime_local_queue_depth_max").set(metrics.max_local_queue_depth as f64);
-    gauge!("tokio_runtime_blocking_threads").set(metrics.blocking_threads_count as f64);
-    gauge!("tokio_runtime_blocking_threads_idle").set(metrics.idle_blocking_threads_count as f64);
-    gauge!("tokio_runtime_blocking_queue_depth").set(metrics.blocking_queue_depth as f64);
+    counter!("tokio.runtime.worker.polls").increment(metrics.total_polls_count);
+    counter!("tokio.runtime.worker.steals").increment(metrics.total_steal_count);
+    gauge!("tokio.runtime.local_queue.depth").set(metrics.total_local_queue_depth as f64);
+    gauge!("tokio.runtime.local_queue.depth.max").set(metrics.max_local_queue_depth as f64);
+    gauge!("tokio.runtime.blocking.thread.count").set(metrics.blocking_threads_count as f64);
+    gauge!("tokio.runtime.blocking.thread.idle.count")
+        .set(metrics.idle_blocking_threads_count as f64);
+    gauge!("tokio.runtime.blocking.queue.depth").set(metrics.blocking_queue_depth as f64);
 }
 
 /// The share of `elapsed` the average worker was busy, from 0 to 1.
@@ -336,10 +338,10 @@ mod tests {
             .map(|(key, ..)| key.key().name().to_owned())
             .collect();
         for name in [
-            "tokio_runtime_poll_duration_mean_seconds",
-            "tokio_runtime_polls_total",
-            "tokio_runtime_local_queue_depth_max",
-            "tokio_runtime_blocking_queue_depth",
+            "tokio.runtime.poll.duration.mean",
+            "tokio.runtime.worker.polls",
+            "tokio.runtime.local_queue.depth.max",
+            "tokio.runtime.blocking.queue.depth",
         ] {
             assert!(names.iter().any(|n| n == name), "{name} not recorded");
         }
@@ -362,10 +364,11 @@ mod tests {
             snapshot.len()
         );
         for (key, _, description, _) in snapshot {
+            let name = key.key().name();
+            assert!(description.is_some(), "{name} has no description");
             assert!(
-                description.is_some(),
-                "{} has no description",
-                key.key().name()
+                name.starts_with("tokio.runtime.") && !name.ends_with("_total"),
+                "{name} isn't an OpenTelemetry-style name"
             );
         }
     }
