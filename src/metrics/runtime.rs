@@ -24,7 +24,13 @@ struct Running;
 impl Running {
     /// Claim the one sampler slot, or `None` if a sampler already has it.
     fn claim() -> Option<Self> {
-        (!RUNNING.swap(true, Ordering::AcqRel)).then_some(Self)
+        // Built only on success: a guard from a failed claim would release
+        // the slot it never held when dropped.
+        if RUNNING.swap(true, Ordering::AcqRel) {
+            None
+        } else {
+            Some(Self)
+        }
     }
 }
 
@@ -91,7 +97,7 @@ impl Drop for Running {
 /// As across this crate: durations in seconds, ratios from 0 to 1, and
 /// counts. `tokio.runtime.worker.busy.time` is whole seconds, since
 /// `metrics` counters are integers: the sampler keeps the exact total and
-/// records the seconds in it, so the error is at most one second per
+/// adds each whole second it gains, so the error is at most one second per
 /// `rate()` window, however short the busy periods.
 ///
 /// # Reading them
@@ -281,9 +287,12 @@ fn record(metrics: &RuntimeMetrics, busy: &mut Duration) {
         .set(duration_ratio(metrics.max_busy_duration, elapsed).clamp(0.0, 1.0));
     gauge!("tokio.runtime.worker.utilization.min")
         .set(duration_ratio(metrics.min_busy_duration, elapsed).clamp(0.0, 1.0));
-    // `metrics` counters are integers: sum exactly, record whole seconds.
+    // `metrics` counters are integers: sum exactly, and add the whole
+    // seconds the sum gained. Incrementing, not setting, keeps counting on
+    // from an earlier sampler's total after a restart.
+    let before = busy.as_secs();
     *busy = busy.saturating_add(metrics.total_busy_duration);
-    counter!("tokio.runtime.worker.busy.time").absolute(busy.as_secs());
+    counter!("tokio.runtime.worker.busy.time").increment(busy.as_secs() - before);
     counter!("tokio.runtime.worker.parks").increment(metrics.total_park_count);
     #[cfg(tokio_unstable)]
     record_unstable(metrics);
@@ -414,12 +423,18 @@ mod tests {
 
         let recorder = DebuggingRecorder::new();
         let snapshotter = recorder.snapshotter();
-        let mut busy = Duration::ZERO;
+        let mut first = Duration::ZERO;
+        let mut restarted = Duration::ZERO;
         let mut sample = RuntimeMetrics::default();
-        sample.total_busy_duration = Duration::from_millis(600);
         ::metrics::with_local_recorder(&recorder, || {
-            record(&sample, &mut busy);
-            record(&sample, &mut busy);
+            // Two 600 ms samples: 1.2 s, one whole second.
+            sample.total_busy_duration = Duration::from_millis(600);
+            record(&sample, &mut first);
+            record(&sample, &mut first);
+            // A restarted sampler sums from 0 again, but must add its second
+            // to the counter the first one left, not set it.
+            sample.total_busy_duration = Duration::from_millis(1_500);
+            record(&sample, &mut restarted);
         });
         let counted = snapshotter
             .snapshot()
@@ -427,8 +442,8 @@ mod tests {
             .into_iter()
             .find(|(key, ..)| key.key().name() == "tokio.runtime.worker.busy.time")
             .map(|(.., value)| value);
-        assert_eq!(counted, Some(DebugValue::Counter(1)));
-        assert_eq!(busy, Duration::from_millis(1_200));
+        assert_eq!(first, Duration::from_millis(1_200));
+        assert_eq!(counted, Some(DebugValue::Counter(2)));
     }
 
     #[tokio::test]
@@ -436,7 +451,10 @@ mod tests {
         // One test, since the guard is process-wide and tests run in parallel.
         let first = export_runtime_metrics().expect("first sampler starts");
         assert!(!first.is_finished());
+        // Twice: a failed claim must not release the slot it never held.
         assert!(export_runtime_metrics().is_none(), "second sampler started");
+        assert!(export_runtime_metrics().is_none(), "third sampler started");
+        assert!(!first.is_finished());
 
         first.abort();
         assert!(first.await.unwrap_err().is_cancelled());
