@@ -210,7 +210,8 @@ The metrics are the server's six under `http.client.*` (`MetricNames::CLIENT`), 
 use tower_telemetry::metrics::{export_process_metrics, export_runtime_metrics, install_panic_counter};
 
 install_panic_counter("process.panics");       // counts panics, then runs the previous hook
-let runtime = export_runtime_metrics();        // `runtime-metrics`: tokio.runtime.* metrics, every second; more with `--cfg tokio_unstable`
+let runtime = export_runtime_metrics();        // `runtime-metrics`: tokio.runtime.* metrics, every second; more with `--cfg tokio_unstable`.
+                                               // One per process: `None` if a sampler is already running.
 let process = export_process_metrics();        // `process-metrics`: process.* metrics, every 5 seconds
 ```
 

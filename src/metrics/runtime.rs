@@ -3,6 +3,7 @@
 //! Built with `--cfg tokio_unstable`, poll, blocking pool and local queue
 //! metrics are recorded as well.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use ::metrics::{Unit, counter, describe_counter, describe_gauge, gauge};
@@ -13,11 +14,32 @@ use tokio_metrics::{RuntimeMetrics, RuntimeMonitor};
 /// How often the runtime is sampled.
 const INTERVAL: Duration = Duration::from_secs(1);
 
+/// Whether a sampler is running in this process: there may be only one.
+static RUNNING: AtomicBool = AtomicBool::new(false);
+
+/// Marks the sampler running until dropped, which happens when its task
+/// ends, is aborted, or its runtime shuts down.
+struct Running;
+
+impl Running {
+    /// Claim the one sampler slot, or `None` if a sampler already has it.
+    fn claim() -> Option<Self> {
+        (!RUNNING.swap(true, Ordering::AcqRel)).then_some(Self)
+    }
+}
+
+impl Drop for Running {
+    fn drop(&mut self) {
+        RUNNING.store(false, Ordering::Release);
+    }
+}
+
 /// Sample the current Tokio runtime once a second, for as long as it runs,
 /// and record what it's doing through the [`metrics`] facade.
 ///
 /// Spawns a task on the current runtime and returns its handle. Call it
-/// once per runtime, inside it, after installing your `metrics` exporter:
+/// once per process, inside the runtime to sample, after installing your
+/// `metrics` exporter:
 ///
 /// ```
 /// use tower_telemetry::metrics::export_runtime_metrics;
@@ -25,7 +47,7 @@ const INTERVAL: Duration = Duration::from_secs(1);
 /// #[tokio::main]
 /// async fn main() {
 ///     // install a `metrics` exporter first
-///     let sampler = export_runtime_metrics();
+///     let sampler = export_runtime_metrics().expect("no sampler running yet");
 ///     // ... serve until shutdown ...
 ///     sampler.abort();
 /// }
@@ -105,12 +127,16 @@ const INTERVAL: Duration = Duration::from_secs(1);
 /// # Limits
 ///
 /// Without `tokio_unstable`, only metrics Tokio exposes on stable Rust are
-/// recorded. Scheduling delays aren't sampled either way. Calling this twice on one
-/// runtime double-counts the incremented counters, and samplers on two runtimes write to
-/// the same unlabelled series.
+/// recorded. Scheduling delays aren't sampled either way.
+///
+/// One sampler runs per process: a second would double-count the counters,
+/// and the metrics have no runtime label to tell two runtimes apart. While
+/// one runs, this returns `None` and starts nothing. Sample the runtime that
+/// serves your traffic.
 ///
 /// The task stops by itself when the runtime shuts down. Abort the handle
-/// to stop it sooner; dropping it leaves the task running.
+/// to stop it sooner; dropping it leaves the task running. Once it stops,
+/// this can start a new one.
 ///
 /// # Panics
 ///
@@ -118,10 +144,13 @@ const INTERVAL: Duration = Duration::from_secs(1);
 ///
 /// [`metrics`]: ::metrics
 #[must_use = "dropping the handle detaches the sampler; keep it to abort it"]
-pub fn export_runtime_metrics() -> JoinHandle<()> {
-    describe();
+pub fn export_runtime_metrics() -> Option<JoinHandle<()>> {
+    // Claimed before anything can panic, so a panic releases it.
+    let running = Running::claim()?;
     let monitor = RuntimeMonitor::new(&Handle::current());
-    tokio::spawn(async move {
+    describe();
+    Some(tokio::spawn(async move {
+        let _running = running;
         let mut intervals = monitor.intervals();
         let mut busy = Duration::ZERO;
         let mut ticker = tokio::time::interval_at(tokio::time::Instant::now() + INTERVAL, INTERVAL);
@@ -133,7 +162,7 @@ pub fn export_runtime_metrics() -> JoinHandle<()> {
                 None => return,
             }
         }
-    })
+    }))
 }
 
 /// Describe each metric's unit and meaning to the installed recorder, for
@@ -403,9 +432,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn exporter_samples_until_aborted() {
-        let handle = export_runtime_metrics();
-        assert!(!handle.is_finished());
-        handle.abort();
+    async fn one_sampler_at_a_time() {
+        // One test, since the guard is process-wide and tests run in parallel.
+        let first = export_runtime_metrics().expect("first sampler starts");
+        assert!(!first.is_finished());
+        assert!(export_runtime_metrics().is_none(), "second sampler started");
+
+        first.abort();
+        assert!(first.await.unwrap_err().is_cancelled());
+        let again = export_runtime_metrics().expect("sampler restarts after abort");
+        again.abort();
     }
 }
