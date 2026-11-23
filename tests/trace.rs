@@ -338,3 +338,92 @@ async fn websocket_schemes_keep_the_default_port() {
     assert_eq!(attribute(1, URL_SCHEME), Some(Value::from("ws")));
     assert_eq!(attribute(1, SERVER_PORT), Some(Value::I64(80)));
 }
+
+#[derive(Debug, Clone, Copy, Default)]
+struct EscapedKeyDecorator;
+
+impl SpanDecorator for EscapedKeyDecorator {
+    const SENSITIVE_QUERY_KEYS: &'static [&'static str] = &["x%2Dapi%2Dkey", "x-api%key"];
+}
+
+#[tokio::test]
+async fn configured_names_with_escapes_still_redact_as_sent() {
+    let exporter = InMemorySpanExporter::default();
+    let provider = SdkTracerProvider::builder()
+        .with_simple_exporter(exporter.clone())
+        .build();
+    let subscriber = tracing_subscriber::registry()
+        .with(tracing_opentelemetry::layer().with_tracer(provider.tracer("test")));
+    let _guard = tracing::subscriber::set_default(subscriber);
+
+    let service = ServiceBuilder::new()
+        .layer(OtelTraceLayer::<EscapedKeyDecorator>::default())
+        .service_fn(|_request: Request<()>| async {
+            Ok::<_, Infallible>(Response::new(String::new()))
+        });
+    service
+        .oneshot(
+            Request::get("/files?x%2Dapi%2Dkey=secret&x-api%key=also&page=2")
+                .body(())
+                .expect("static request"),
+        )
+        .await
+        .expect("infallible");
+
+    provider.force_flush().expect("flush");
+    let spans = exporter.get_finished_spans().expect("spans");
+    let query = spans[0]
+        .attributes
+        .iter()
+        .find(|attribute| attribute.key == Key::from_static_str(URL_QUERY))
+        .map(|attribute| attribute.value.clone());
+    assert_eq!(
+        query,
+        Some(Value::from(
+            "x%2Dapi%2Dkey=REDACTED&x-api%key=REDACTED&page=2"
+        ))
+    );
+}
+
+#[tokio::test]
+async fn client_configured_escaped_names_redact_as_sent() {
+    use tower_telemetry::OtelClientTraceLayer;
+
+    let exporter = InMemorySpanExporter::default();
+    let provider = SdkTracerProvider::builder()
+        .with_simple_exporter(exporter.clone())
+        .build();
+    let subscriber = tracing_subscriber::registry()
+        .with(tracing_opentelemetry::layer().with_tracer(provider.tracer("test")));
+    let _guard = tracing::subscriber::set_default(subscriber);
+
+    let client = ServiceBuilder::new()
+        .layer(OtelClientTraceLayer::with_redacted_query_keys(&[
+            "x%2Dapi%2Dkey",
+        ]))
+        .service_fn(|_request: Request<String>| async {
+            Ok::<_, Infallible>(Response::new(String::new()))
+        });
+    client
+        .oneshot(
+            Request::get("https://api.example/v1?x%2Dapi%2Dkey=secret&page=2")
+                .body(String::new())
+                .expect("static request"),
+        )
+        .await
+        .expect("infallible");
+
+    provider.force_flush().expect("flush");
+    let spans = exporter.get_finished_spans().expect("spans");
+    let url = spans[0]
+        .attributes
+        .iter()
+        .find(|attribute| attribute.key == Key::from_static_str(URL_FULL))
+        .map(|attribute| attribute.value.clone());
+    assert_eq!(
+        url,
+        Some(Value::from(
+            "https://api.example/v1?x%2Dapi%2Dkey=REDACTED&page=2"
+        ))
+    );
+}

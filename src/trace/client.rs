@@ -80,8 +80,8 @@ pub struct OtelClientTraceLayer;
 impl OtelClientTraceLayer {
     /// The same layer, with `keys` added to the query parameter names whose
     /// values `url.full` redacts. The built-in names always apply; `keys`
-    /// only extends them. Names match after percent-decoding, without
-    /// regard to case.
+    /// only extends them. Names match as sent or after percent-decoding,
+    /// without regard to case.
     ///
     /// ```
     /// use tower::ServiceBuilder;

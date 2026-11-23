@@ -119,7 +119,7 @@ pub(crate) fn target<B>(request: &Request<B>) -> (&str, Option<u16>) {
 
 /// Query parameters whose values are credentials: signed URLs (AWS, Google
 /// and Azure SAS), and the common names for bearer and API tokens. Names
-/// are matched after percent-decoding, without regard to case.
+/// match as sent or after percent-decoding, without regard to case.
 #[cfg(feature = "trace")]
 const SENSITIVE_QUERY_KEYS: [&str; 13] = [
     "AWSAccessKeyId",
@@ -182,8 +182,10 @@ fn decode_name(name: &str) -> Option<Cow<'_, str>> {
 }
 
 /// Whether a query parameter's name is a credential: one of the built-in
-/// names, or one of `extra`, compared after decoding and without regard to
-/// case.
+/// names, or one of `extra`, matched as sent or after percent-decoding, and
+/// without regard to case. The name as sent is tried first, so a configured
+/// name that itself contains an escape, or isn't valid as decoded, still
+/// matches.
 #[cfg(feature = "trace")]
 fn is_sensitive_key(key: &str, extra: &[&str]) -> bool {
     if extra
@@ -583,6 +585,21 @@ mod tests {
             redact_query("pa%67e=2", &[]),
             "pa%67e=2",
             "a decoded name that isn't a credential is left alone"
+        );
+    }
+
+    #[cfg(feature = "trace")]
+    #[test]
+    fn configured_names_match_as_sent_too() {
+        assert_eq!(
+            redact_query("x%2Dapi%2Dkey=secret", &["x%2Dapi%2Dkey"]),
+            "x%2Dapi%2Dkey=REDACTED",
+            "a configured name with an escape matches as sent"
+        );
+        assert_eq!(
+            redact_query("x-api%key=secret", &["x-api%key"]),
+            "x-api%key=REDACTED",
+            "a configured name that isn't a valid escape matches as sent"
         );
     }
 

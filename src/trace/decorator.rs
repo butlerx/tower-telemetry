@@ -94,8 +94,8 @@ pub trait SpanDecorator {
     /// Query parameter names whose values `url.query` redacts, on top of the
     /// built-in list: signed-URL parameters and common token names. The
     /// built-in names always apply; this only adds to them. Names match
-    /// after percent-decoding and without regard to case. The default is
-    /// empty.
+    /// as sent or after percent-decoding, and without regard to case. The
+    /// default is empty.
     ///
     /// ```
     /// use tower_telemetry::{OtelTraceLayer, SpanDecorator};
