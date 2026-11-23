@@ -1,6 +1,6 @@
 [package]
 name         = "tower-telemetry"
-version      = "0.2.2"
+version      = "0.3.0"
 edition      = "2024"
 rust-version = "1.88"
 description  = "OpenTelemetry HTTP and messaging spans and HTTP metrics as Tower layers, for hyper and axum servers and message consumers."
