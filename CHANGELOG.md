@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.2.2](https://github.com/butlerx/tower-telemetry/compare/v0.2.1...v0.2.2) (2026-11-23)
+
+
+### Features
+
+* process metrics, tokio_unstable runtime metrics, metric descriptions ([#18](https://github.com/butlerx/tower-telemetry/issues/18)) ([248379c](https://github.com/butlerx/tower-telemetry/commit/248379c98ecfe89934a9a8c941ea9f2e7af906d7))
+
+
+### Bug Fixes
+
+* redact credential query names that are percent-encoded ([#17](https://github.com/butlerx/tower-telemetry/issues/17)) ([a293d73](https://github.com/butlerx/tower-telemetry/commit/a293d732ee2203d5612b7b8cc86b6665dd0dbe85))
+
 ## [0.2.1](https://github.com/butlerx/tower-telemetry/compare/v0.2.0...v0.2.1) (2026-11-20)
 
 
