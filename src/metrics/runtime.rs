@@ -47,7 +47,7 @@ const INTERVAL: Duration = Duration::from_secs(1);
 /// | `tokio.runtime.worker.utilization`     | gauge   | 0 to 1       | share of the last second the average worker was busy    |
 /// | `tokio.runtime.worker.utilization.max` | gauge   | 0 to 1       | the same for the busiest worker                         |
 /// | `tokio.runtime.worker.utilization.min` | gauge   | 0 to 1       | the same for the least busy worker                      |
-/// | `tokio.runtime.worker.busy.time`       | counter | microseconds | time workers have spent busy, summed over workers       |
+/// | `tokio.runtime.worker.busy.time`       | counter | seconds      | time workers have spent busy, summed over workers       |
 /// | `tokio.runtime.worker.parks`           | counter | count        | times workers have parked, with nothing to do           |
 ///
 /// Built with `RUSTFLAGS="--cfg tokio_unstable"`, these are recorded too:
@@ -67,9 +67,10 @@ const INTERVAL: Duration = Duration::from_secs(1);
 /// # Units
 ///
 /// As across this crate: durations in seconds, ratios from 0 to 1, and
-/// counts. The exception is `tokio.runtime.worker.busy.time`, in
-/// microseconds: `metrics` counters are integers, and whole seconds would
-/// drop the short busy periods that make up most of a worker's time.
+/// counts. `tokio.runtime.worker.busy.time` is whole seconds, since
+/// `metrics` counters are integers: the sampler keeps the exact total and
+/// records the seconds in it, so the error is at most one second per
+/// `rate()` window, however short the busy periods.
 ///
 /// # Reading them
 ///
@@ -105,7 +106,7 @@ const INTERVAL: Duration = Duration::from_secs(1);
 ///
 /// Without `tokio_unstable`, only metrics Tokio exposes on stable Rust are
 /// recorded. Scheduling delays aren't sampled either way. Calling this twice on one
-/// runtime double-counts the counters, and samplers on two runtimes write to
+/// runtime double-counts the incremented counters, and samplers on two runtimes write to
 /// the same unlabelled series.
 ///
 /// The task stops by itself when the runtime shuts down. Abort the handle
@@ -122,12 +123,13 @@ pub fn export_runtime_metrics() -> JoinHandle<()> {
     let monitor = RuntimeMonitor::new(&Handle::current());
     tokio::spawn(async move {
         let mut intervals = monitor.intervals();
+        let mut busy = Duration::ZERO;
         let mut ticker = tokio::time::interval_at(tokio::time::Instant::now() + INTERVAL, INTERVAL);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             ticker.tick().await;
             match intervals.next() {
-                Some(metrics) => record(&metrics),
+                Some(metrics) => record(&metrics, &mut busy),
                 None => return,
             }
         }
@@ -166,7 +168,7 @@ fn describe() {
     );
     describe_counter!(
         "tokio.runtime.worker.busy.time",
-        Unit::Microseconds,
+        Unit::Seconds,
         "Time Tokio workers have spent busy, summed over workers."
     );
     describe_counter!(
@@ -233,7 +235,10 @@ fn describe_unstable() {
     reason = "gauges are f64; counts this large are not exact anyway"
 )]
 /// Record one sample of the runtime's metrics.
-fn record(metrics: &RuntimeMetrics) {
+///
+/// `busy` is the workers' busy time so far, kept exact between samples so
+/// `tokio.runtime.worker.busy.time` loses no sub-second periods.
+fn record(metrics: &RuntimeMetrics, busy: &mut Duration) {
     let elapsed = metrics.elapsed;
     gauge!("tokio.runtime.worker.count").set(metrics.workers_count as f64);
     gauge!("tokio.runtime.task.count").set(metrics.live_tasks_count as f64);
@@ -247,10 +252,9 @@ fn record(metrics: &RuntimeMetrics) {
         .set(duration_ratio(metrics.max_busy_duration, elapsed).clamp(0.0, 1.0));
     gauge!("tokio.runtime.worker.utilization.min")
         .set(duration_ratio(metrics.min_busy_duration, elapsed).clamp(0.0, 1.0));
-    // `metrics` counters are integers: microseconds keep sub-second busy
-    // periods that whole seconds would drop.
-    counter!("tokio.runtime.worker.busy.time")
-        .increment(u64::try_from(metrics.total_busy_duration.as_micros()).unwrap_or(u64::MAX));
+    // `metrics` counters are integers: sum exactly, record whole seconds.
+    *busy = busy.saturating_add(metrics.total_busy_duration);
+    counter!("tokio.runtime.worker.busy.time").absolute(busy.as_secs());
     counter!("tokio.runtime.worker.parks").increment(metrics.total_park_count);
     #[cfg(tokio_unstable)]
     record_unstable(metrics);
@@ -330,7 +334,9 @@ mod tests {
 
         let recorder = DebuggingRecorder::new();
         let snapshotter = recorder.snapshotter();
-        ::metrics::with_local_recorder(&recorder, || record(&RuntimeMetrics::default()));
+        ::metrics::with_local_recorder(&recorder, || {
+            record(&RuntimeMetrics::default(), &mut Duration::default());
+        });
         let names: Vec<_> = snapshotter
             .snapshot()
             .into_vec()
@@ -355,7 +361,7 @@ mod tests {
         let snapshotter = recorder.snapshotter();
         ::metrics::with_local_recorder(&recorder, || {
             describe();
-            record(&RuntimeMetrics::default());
+            record(&RuntimeMetrics::default(), &mut Duration::default());
         });
         let snapshot = snapshotter.snapshot().into_vec();
         assert!(
@@ -371,6 +377,29 @@ mod tests {
                 "{name} isn't an OpenTelemetry-style name"
             );
         }
+    }
+
+    #[test]
+    fn busy_time_keeps_sub_second_periods() {
+        use metrics_util::debugging::{DebugValue, DebuggingRecorder};
+
+        let recorder = DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+        let mut busy = Duration::ZERO;
+        let mut sample = RuntimeMetrics::default();
+        sample.total_busy_duration = Duration::from_millis(600);
+        ::metrics::with_local_recorder(&recorder, || {
+            record(&sample, &mut busy);
+            record(&sample, &mut busy);
+        });
+        let counted = snapshotter
+            .snapshot()
+            .into_vec()
+            .into_iter()
+            .find(|(key, ..)| key.key().name() == "tokio.runtime.worker.busy.time")
+            .map(|(.., value)| value);
+        assert_eq!(counted, Some(DebugValue::Counter(1)));
+        assert_eq!(busy, Duration::from_millis(1_200));
     }
 
     #[tokio::test]
