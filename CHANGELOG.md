@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.3.0](https://github.com/butlerx/tower-telemetry/compare/v0.2.2...v0.3.0) (2026-11-23)
+
+
+### ⚠ BREAKING CHANGES
+
+* OpenTelemetry metric names, busy time in seconds, one runtime sampler per process ([#20](https://github.com/butlerx/tower-telemetry/issues/20))
+
+### Features
+
+* OpenTelemetry metric names, busy time in seconds, one runtime sampler per process ([#20](https://github.com/butlerx/tower-telemetry/issues/20)) ([3c97b2d](https://github.com/butlerx/tower-telemetry/commit/3c97b2d30b9ee2595ab80c6b5ffb6f491ee73aee))
+
 ## [0.2.2](https://github.com/butlerx/tower-telemetry/compare/v0.2.1...v0.2.2) (2026-11-23)
 
 
