@@ -40,7 +40,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )?;
     }
     let handle = prometheus.install_recorder()?;
-    install_panic_counter("process_panics_total");
+    install_panic_counter("process.panics");
 
     let app = Router::new()
         .route(

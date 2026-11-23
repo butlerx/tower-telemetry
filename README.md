@@ -209,23 +209,27 @@ The metrics are the server's six under `http.client.*` (`MetricNames::CLIENT`), 
 ```rust
 use tower_telemetry::metrics::{export_process_metrics, export_runtime_metrics, install_panic_counter};
 
-install_panic_counter("process_panics_total"); // counts panics, then runs the previous hook
-let runtime = export_runtime_metrics();        // `runtime-metrics`: tokio_runtime_* gauges, every second; more with `--cfg tokio_unstable`
-let process = export_process_metrics();        // `process-metrics`: process_* metrics, every 5 seconds
+install_panic_counter("process.panics");       // counts panics, then runs the previous hook
+let runtime = export_runtime_metrics();        // `runtime-metrics`: tokio.runtime.* metrics, every second; more with `--cfg tokio_unstable`.
+                                               // One per process: `None` if a sampler is already running.
+let process = export_process_metrics();        // `process-metrics`: process.* metrics, every 5 seconds
 ```
 
-`export_process_metrics` records the standard Prometheus process metrics on Linux, macOS, Windows and the BSDs:
+`export_process_metrics` records OpenTelemetry's process metrics on Linux, macOS, Windows and the BSDs. Prometheus with recommended naming adds the unit and `_total` (`process_cpu_time_seconds_total`):
 
-| Name                               | Type    | What it is                                         |
-| ---------------------------------- | ------- | -------------------------------------------------- |
-| `process_cpu_seconds_total`        | counter | user and system CPU time                           |
-| `process_resident_memory_bytes`    | gauge   | resident memory (RSS)                              |
-| `process_virtual_memory_bytes`     | gauge   | virtual memory                                     |
-| `process_virtual_memory_max_bytes` | gauge   | virtual memory limit (not on Windows)              |
-| `process_open_fds`                 | gauge   | open file descriptors (handles on Windows)         |
-| `process_max_fds`                  | gauge   | file descriptor limit                              |
-| `process_threads`                  | gauge   | OS threads (not on Windows)                        |
-| `process_start_time_seconds`       | gauge   | start time, seconds since the Unix epoch           |
+| Name                                 | Type    | Unit    | What it is                                    |
+| ------------------------------------ | ------- | ------- | --------------------------------------------- |
+| `process.cpu.time`                   | counter | seconds | CPU time by `cpu.mode`: `user`, `system`      |
+| `process.memory.usage`               | gauge   | bytes   | resident memory (RSS)                         |
+| `process.memory.virtual`             | gauge   | bytes   | committed virtual memory                      |
+| `process.memory.virtual.limit`       | gauge   | bytes   | virtual memory limit (not on Windows)         |
+| `process.unix.file_descriptor.count` | gauge   | count   | open file descriptors (Unix)                  |
+| `process.unix.file_descriptor.limit` | gauge   | count   | file descriptor limit (Unix)                  |
+| `process.windows.handle.count`       | gauge   | count   | open handles (Windows)                        |
+| `process.thread.count`               | gauge   | count   | OS threads (not on Windows)                   |
+| `process.uptime`                     | gauge   | seconds | time since the process started                |
+
+Runtime metrics are named `tokio.runtime.*` in the same style; see `export_runtime_metrics` for the list.
 
 ## Messaging
 
